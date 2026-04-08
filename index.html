@@ -100,8 +100,99 @@ function genBSC(co,iso,r){const{D,AT,u,n,b,it,p,pg}=H();const d=co.directorName|
 function genBTE(co,iso,r){const{D,AT,u,n,b,it,p,pg}=H();const d=co.directorName||'',dp=co.directorPosition||'Директор',bk=[co.bankAccount,co.bankName?'в '+co.bankName:'',co.bik?'БИК '+co.bik:''].filter(Boolean).join(' ');return new D({styles:{default:{document:{run:{font:'Times New Roman',size:24}}}},sections:[{properties:pg,children:[p([b('Орган по сертификации систем менеджмента')],{alignment:AT.CENTER}),p([b('Общества с ограниченной ответственностью «БелТехЭкспертиза»')],{alignment:AT.CENTER}),p([b('(220007, г. Минск, ул. Володько, д. 20, офис 9, sertbte@mail.ru)')],{alignment:AT.CENTER}),p([n('')]),p([b('ЗАЯВКА')],{alignment:AT.CENTER}),p([b('на проведение работ по сертификации систем менеджмента')],{alignment:AT.CENTER}),p([n('')]),p([b(co.companyName||'')]),p([b('Место нахождения юридического лица: '),n(co.legalAddress||'')]),p([b('Банковские реквизиты:  '),n(bk)]),p([n('Адрес банка: '+(co.bankAddress||''))]),p([b('Регистрационный номер в ЕГР:  '),n(co.unp||'')]),p([b('Тел/факс.: '),n(co.phone||'')]),p([b('В лице директора '),n(d+', действующего на основании '),u('Устава')]),p([n('заявляю, что в организации внедрена '),u('система менеджмента качества')]),p([n('соответствующая требованиям '),u('СТБ ISO 9001-2015, СТБ ISO 45001-2020')]),p([n('С допустимыми неприменениями: '),u(EXCL)]),p([n('Прошу провести сертификацию системы '),u('менеджмента качества, системы менеджмента здоровья и безопасности при профессиональной деятельности'),n('.')]),p([n('')]),p([b('2'),n(' Сведения о системе управления:')]),p([b('2.1'),n(' Год внедрения '),u(iso.yearImplemented||'2026 г.')]),p([b('2.2'),n(' Область применения: '),u(iso.scope||'')]),p([b('2.3'),n(' Консультирование проводил '),u(iso.consultant||'')]),p([b('2.4'),n(' Обозначение документов: '),u(TNPA)]),p([b('2.5'),n(' Наличие обособленных подразделений '),u(iso.subdivisions||'нет')]),p([b('2.6'),n(' Количество работников '),n(iso.employeeCount||''),b(' чел.')]),p([b('2.7'),n(' Предыдущий сертификат '),u(iso.prevCert||'-')]),p([b('2.8'),n(' Представитель руководства')]),p([u(iso.representative||(dp+' '+d))]),p([n('')]),p([b('3'),n(' Обязуюсь:')]),p([n('выполнять все условия сертификации; обеспечивать соответствие; оплатить все расходы.')]),p([n('')]),p([b('4 Контактное лицо: '),u(iso.contactPerson||'')]),p([b('Телефон: '),b(iso.contactPhone||co.phone||'')]),p([n('')]),p([b('5'),n(' Приложения: '),u('анкета-вопросник СМК, исходная информация для оценки СМК.')]),p([n('')]),p([n('Директор ________________ '),u(d)]),p([n('«___» _________ 20__ г.')]),p([n('')]),p([n('Главный бухгалтер ________________ _______________')]),p([n('«___» _________ 20__ г.')]),
 ...(r.name?[p([n('')]),p([b('Ответственный исполнитель: '),n(r.name+(r.phone?' '+r.phone:''))])]:[])]}]});}
 
-// CERT METAL
-function genCert(co,cert,r){const{D,AT,u,n,b,it,p,pg}=H();const d=co.directorName||'',dp=co.directorPosition||'Директор';const std=CERTS.find(x=>x.id===cert.standard)||{};const prod=cert.productName||std.prod||'';return new D({styles:{default:{document:{run:{font:'Times New Roman',size:24}}}},sections:[{properties:pg,children:[p([n('Республиканское унитарное предприятие')],{alignment:AT.CENTER}),p([n('«Белорусский институт строительного проектирования»')],{alignment:AT.CENTER}),p([n('Управления делами Президента Республики Беларусь.')],{alignment:AT.CENTER}),p([n('Орган по сертификации продукции и услуг «БелСертификат»')],{alignment:AT.CENTER}),p([n('220088, г. Минск, ул. Смоленская, 15')],{alignment:AT.CENTER}),p([n('')]),p([n('ЗАЯВКА')],{alignment:AT.CENTER}),p([b('на сертификацию продукции')],{alignment:AT.CENTER}),p([n('')]),p([b('1. '),n((co.companyName||'')+', '+(co.legalAddress||''))]),p([it('полное наименование заявителя')]),p([b('банковские реквизиты '),n([co.bankAccount,co.bankName?'в '+co.bankName:'',co.bik?'БИК '+co.bik:''].filter(Boolean).join(' '))]),p([n('Адрес банка: '+(co.bankAddress||''))]),p([b('регистрационный номер в ЕГР '),n(co.unp||'')]),p([b('номер телефона: '),n(co.phone||''),b('  адрес электронной почты '),n(co.email||'')]),p([b('в лице '),n(dp+'а '+d+', действующего на основании Устава')]),p([b('заявляю, что '),n(prod)]),p([b('код ТН ВЭД ЕАЭС '),n(cert.tnved||std.tv||''),b('    код ОКП РБ '),n(cert.okp||std.okp||'')]),p([b('изготовленная '),n((co.companyName||'')+', '+(co.legalAddress||''))]),p([b('выпускается '),n(cert.production||'Серийно')]),p([b('по '),n((std.label||'')+' «'+(std.fn||'')+'»')]),p([b('соответствуют требованиям '),n((std.tr||'')+', '+(std.label||''))]),p([n('')]),p([b('Прошу провести обязательную сертификацию по схеме '),b(cert.scheme||'1С')]),p([n('')]),p([b('2. Обязуюсь:')]),p([it('- выполнять все условия сертификации;')]),p([it('- обеспечивать соответствие продукции требованиям документов;')]),p([it('- оплатить все расходы по проведению сертификации.')]),p([n('')]),p([n(dp+'                                                    '+d)]),p([n('«      »                              20    г.')]),p([n('')]),p([b('Ответственный исполнитель      '),n((r.name||'')+(r.phone?' '+r.phone:''))])]}]});}
+// CERT METAL - exact table format matching original
+function genCert(co,cert,r){
+const{D,AT,u,n,b,it,p,pg,Table,TRw,TC,WT,BS}=H();
+const d=co.directorName||'';const dp=co.directorPosition||'Директор';
+const std=CERTS.find(x=>x.id===cert.standard)||{};
+const prod=cert.productName||std.prod||'';
+const br={style:BS.SINGLE,size:1,color:'000000'};const brs={top:br,bottom:br,left:br,right:br};
+const nbr={style:BS.NONE,size:0};const nobrs={top:nbr,bottom:nbr,left:nbr,right:nbr};
+const tw=9300;
+// Table row helper: bold label left, value right (spanning full width)
+const trow=(label,value,labelW)=>{
+const lw=labelW||3200;const vw=tw-lw;
+return new TRw({children:[
+new TC({borders:brs,width:{size:lw,type:WT.DXA},children:[p([b(label)])]}),
+new TC({borders:brs,width:{size:vw,type:WT.DXA},children:[p([n(value)])]})
+]})};
+// Full-width row
+const frow=(children,bold)=>new TRw({children:[new TC({borders:brs,width:{size:tw,type:WT.DXA},columnSpan:2,children:[p(bold?[b(typeof children==='string'?children:'')]:Array.isArray(children)?children:[n(typeof children==='string'?children:'')])]})]});
+// Italic hint row
+const hrow=(text)=>new TRw({children:[new TC({borders:brs,width:{size:tw,type:WT.DXA},columnSpan:2,children:[p([it(text)])]})]});
+const bankLine=[co.bankAccount?'р/с '+co.bankAccount:'',co.bankName?co.bankName+',':'',co.bik?'код банка '+co.bik:''].filter(Boolean).join(' ');
+
+const mainTable=new Table({width:{size:tw,type:WT.DXA},columnWidths:[3200,6100],rows:[
+// 1. Company name + address
+trow('1.',co.companyName+',\n'+(co.legalAddress||'')),
+hrow('полное наименование заявителя на проведение сертификации, его место нахождения, включая наименование страны'),
+frow(co.legalAddress||'-'),
+hrow('адрес (адреса) места осуществления деятельности (в случае если адреса различаются), включая наименование страны'),
+trow('банковские реквизиты',bankLine+'\nАдрес банка: '+(co.bankAddress||'')),
+trow('регистрационный номер в ЕГР',co.unp||''),
+new TRw({children:[
+new TC({borders:brs,width:{size:2400,type:WT.DXA},children:[p([b('номер телефона:')])]}),
+new TC({borders:brs,width:{size:2000,type:WT.DXA},children:[p([n(co.phone||'')])]}),
+new TC({borders:brs,width:{size:2400,type:WT.DXA},children:[p([b('адрес электронной почты')])]}),
+new TC({borders:brs,width:{size:2500,type:WT.DXA},children:[p([n(co.email||'')])]})
+]}),
+trow('в лице',dp+'а '+d+', действующего на основании Устава'),
+hrow('должность служащего, фамилия, собственное имя, отчество руководителя (уполномоченного руководителем должностного лица) заявителя на проведение сертификации, на основании чего действует'),
+trow('заявляю, что',prod),
+hrow('наименование и обозначение продукции, сведения о продукции, обеспечивающие ее идентификацию'),
+new TRw({children:[
+new TC({borders:brs,width:{size:2400,type:WT.DXA},children:[p([b('код ТН ВЭД ЕАЭС')])]}),
+new TC({borders:brs,width:{size:2000,type:WT.DXA},children:[p([n(cert.tnved||std.tv||'')])]}),
+new TC({borders:brs,width:{size:2400,type:WT.DXA},children:[p([b('код ОКП РБ')])]}),
+new TC({borders:brs,width:{size:2500,type:WT.DXA},children:[p([n(cert.okp||std.okp||'')])]})
+]}),
+trow('изготовленная',(co.companyName||'')+', '+(co.legalAddress||'')),
+hrow('полное наименование изготовителя, его место нахождения'),
+frow(co.legalAddress||''),
+hrow('адрес места осуществления деятельности по изготовлению продукции'),
+trow('выпускается',cert.production||'Серийно'),
+hrow('серийно, партия, единичное изделие'),
+trow('товаросопроводительные документы','-'),
+trow('по',(std.label||'')+' «'+(std.fn||'')+'»'),
+hrow('наименование и обозначение документа (документов), в соответствии с которым (которыми) изготовлена продукция'),
+trow('соответствуют требованиям',(std.tr||'')+', '+(std.label||'')),
+hrow('обозначение документа (документов), устанавливающего (устанавливающих) технические требования, на соответствие которому (которым) планируется провести сертификацию'),
+]});
+
+return new D({styles:{default:{document:{run:{font:'Times New Roman',size:24}}}},sections:[{properties:pg,children:[
+p([n('Республиканское унитарное предприятие')],{alignment:AT.CENTER}),
+p([n('«Белорусский институт строительного проектирования»')],{alignment:AT.CENTER}),
+p([n('Управления делами Президента Республики Беларусь.')],{alignment:AT.CENTER}),
+p([n('Орган по сертификации продукции и услуг «БелСертификат»')],{alignment:AT.CENTER}),
+p([n('220088, г. Минск, ул. Смоленская, 15')],{alignment:AT.CENTER}),
+p([n('')]),
+p([n('ЗАЯВКА')],{alignment:AT.CENTER}),
+p([b('на сертификацию продукции')],{alignment:AT.CENTER}),
+p([n('')]),
+mainTable,
+p([n('')]),
+p([b('Прошу провести обязательную (добровольную) сертификацию по схеме       '),b(cert.scheme||'1С')]),
+p([it('                                                                                                       обозначение схемы сертификации продукции')]),
+p([n('')]),
+p([b('2. Обязуюсь:')]),
+p([it('- выполнять все условия сертификации;')]),
+p([it('- обеспечивать соответствие сертифицированной продукции требованиям документов, устанавливающих технические требования, указанных в сертификате соответствия;')]),
+p([it('- оплатить все расходы по проведению сертификации,')]),
+p([it('- нести ответственность за предоставленную информацию в орган по сертификации.')]),
+p([n('')]),
+p([b('*Приложения')]),
+p([n('')]),
+p([n(dp+'                                                                        '+d)]),
+p([n('                              подпись                                              фамилия, инициалы')]),
+p([n('                                             «      »                              20    г.')]),
+p([n('')]),
+p([n('Главный бухгалтер                                                       _______________')]),
+p([n('                              подпись                                              фамилия, инициалы')]),
+p([n('М.П.                                         «      »                              20    г.')]),
+p([n('')]),
+p([b('Ответственный исполнитель       '),n((r.name||'')+(r.phone?' '+r.phone:''))]),
+]}]});
+}
 
 // STROYCOMPLEX SPK
 function genSK(co,spk,sw,r){const{D,AT,u,n,b,it,p,pg,Table,TRw,TC,WT,BS}=H();const d=co.directorName||'',dp=co.directorPosition||'Директор';const br={style:BS.SINGLE,size:1,color:'000000'};const brs={top:br,bottom:br,left:br,right:br};const cl=(x,w,bl)=>new TC({borders:brs,width:{size:w,type:WT.DXA},children:[p([bl?b(x):n(x)],{spacing:{after:20}})]});
@@ -179,7 +270,10 @@ async function handleKP(file){if(!file)return;const matched=await parseKP(file);
 // RENDER
 function render(){document.getElementById('stepsBar').innerHTML=STEPS.map((n,i)=>`<div class="step-item ${S.step===i?'active':''} ${S.step>i?'done':''}" onclick="if(${i}<=${S.step}){S.step=${i};render()}">${n}</div>`).join('');const el=document.getElementById('app');[rUpload,rCompany,rType,rParams,rGenerate][S.step](el)}
 
-function rUpload(el){el.innerHTML=`<div class="upload-zone" id="dz" onclick="document.getElementById('fi').click()"><input type="file" id="fi" accept=".docx" hidden><div class="upload-icon">📄</div><div class="upload-title">Загрузите счёт-заказ или договор</div><div class="upload-sub">Перетащите .docx файл или нажмите для выбора</div></div><div id="us"></div><div style="text-align:center;margin-top:12px"><button class="btn btn-s" onclick="S.step=1;render()">Пропустить (ввести вручную)</button></div>`;const z=document.getElementById('dz'),fi=document.getElementById('fi');z.ondragover=e=>{e.preventDefault();z.classList.add('drag')};z.ondragleave=()=>z.classList.remove('drag');z.ondrop=e=>{e.preventDefault();z.classList.remove('drag');doFile(e.dataTransfer.files[0])};fi.onchange=()=>doFile(fi.files[0])}
+function rUpload(el){
+// Reset all data for new application
+S.company={};S.iso={consultant:'Клепицкая Виктория Александровна',scope:'выполнение функций генерального подрядчика, производство строительно-монтажных работ',yearImplemented:'2026',subdivisions:'нет',prevCert:'нет'};S.cert={standard:'',productName:'',tnved:'',okp:'',production:'Серийно',scheme:'1С'};S.spk={headPosition:'',headName:''};S.sw=new Set();S.responsible={};S.bxS='';S.bxR=[];S.bxL=false;S.gen=false;S.done=false;S.ws='';S.kpMsg='';
+el.innerHTML=`<div class="upload-zone" id="dz" onclick="document.getElementById('fi').click()"><input type="file" id="fi" accept=".docx" hidden><div class="upload-icon">📄</div><div class="upload-title">Загрузите счёт-заказ или договор</div><div class="upload-sub">Перетащите .docx файл или нажмите для выбора</div></div><div id="us"></div><div style="text-align:center;margin-top:12px"><button class="btn btn-s" onclick="S.step=1;render()">Пропустить (ввести вручную)</button></div>`;const z=document.getElementById('dz'),fi=document.getElementById('fi');z.ondragover=e=>{e.preventDefault();z.classList.add('drag')};z.ondragleave=()=>z.classList.remove('drag');z.ondrop=e=>{e.preventDefault();z.classList.remove('drag');doFile(e.dataTransfer.files[0])};fi.onchange=()=>doFile(fi.files[0])}
 async function doFile(f){if(!f)return;document.getElementById('us').innerHTML='<div style="text-align:center;padding:20px"><div class="spin"></div>Извлекаю реквизиты...</div>';try{S.company=await parseInvoice(f);if(S.company.directorName)S.iso.representative=(S.company.directorPosition||'Директор')+' '+S.company.directorName;S.step=1;render()}catch(e){document.getElementById('us').innerHTML='<div class="status err">Ошибка: '+e.message+'</div>'}}
 
 function rCompany(el){const f=(k,l,fw)=>`<div class="field ${fw?'fw':''}"><label>${l}</label><input type="text" value="${E(S.company[k]||'')}" onchange="S.company['${k}']=this.value"></div>`;el.innerHTML=`<div class="card"><div class="card-title">📇 Реквизиты заказчика</div><div class="card-sub">Проверьте данные из счёта-заказа.</div><div class="fg">${f('companyName','Наименование организации',1)}${f('legalAddress','Юридический адрес',1)}${f('bankAccount','Расчётный счёт (IBAN)')}${f('bankName','Банк')}${f('bik','БИК')}${f('bankAddress','Адрес банка')}${f('unp','УНП (рег. номер в ЕГР)')}${f('phone','Телефон')}${f('email','E-mail')}${f('directorPosition','Должность руководителя')}${f('directorName','ФИО руководителя')}</div></div><div class="actions"><button class="btn btn-s" onclick="S.step=0;render()">← Назад</button><button class="btn btn-p" onclick="S.step=2;render()">Далее →</button></div>`}
