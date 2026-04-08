@@ -24,11 +24,40 @@
 .wt-list{max-height:400px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;margin-top:8px}.wt-item{border-bottom:1px solid #f1f5f9;padding:8px 12px;display:flex;align-items:flex-start;gap:8px;cursor:pointer;transition:background .15s}.wt-item:hover{background:#f8fafc}.wt-item.checked{background:#f0fdf4}.wt-item input[type=checkbox]{width:18px;height:18px;accent-color:#059669;cursor:pointer;flex-shrink:0;margin-top:2px}.wt-nm{font-size:13px;font-weight:500;flex:1}.wt-tnpa{font-size:11px;color:#64748b}.wt-sub{font-size:11px;color:#64748b;margin-top:2px}.wt-count{text-align:right;font-size:13px;color:#64748b;margin-top:8px;font-weight:500}
 .search-input{width:100%;padding:9px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:14px;font-family:inherit;background:#fafbfc}.search-input:focus{outline:none;border-color:#2563eb;background:#fff}
 @media(max-width:640px){.fg{grid-template-columns:1fr}.type-grid{grid-template-columns:1fr 1fr}}
+.module-tabs{display:flex;gap:4px}
+.mod-tab{padding:8px 16px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;background:rgba(255,255,255,.15);color:rgba(255,255,255,.7);transition:.2s}
+.mod-tab:hover{background:rgba(255,255,255,.25);color:#fff}
+.mod-tab.active{background:rgba(255,255,255,.95);color:#1a1a2e}
+.scan-zone{border:2px dashed #cbd5e1;border-radius:14px;padding:40px 20px;text-align:center;cursor:pointer;background:#fff;transition:.3s}
+.scan-zone:hover,.scan-zone.drag{border-color:#2563eb;background:#f0f5ff}
+.scan-preview{display:flex;gap:20px;flex-wrap:wrap;margin-top:16px}
+.scan-img-wrap{flex:1;min-width:280px;text-align:center}
+.scan-img-wrap img{max-width:100%;max-height:500px;border-radius:8px;border:1px solid #e2e8f0}
+.scan-img-wrap canvas{max-width:100%;max-height:500px;border-radius:8px;border:1px solid #e2e8f0}
+.scan-label{font-size:13px;font-weight:600;color:#475569;margin-bottom:8px}
+.slider-row{display:flex;align-items:center;gap:10px;margin:8px 0}
+.slider-row label{font-size:12px;font-weight:600;color:#475569;min-width:100px}
+.slider-row input[type=range]{flex:1;accent-color:#2563eb}
+.slider-row .val{font-size:12px;color:#64748b;min-width:40px;text-align:right}
+.scan-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.scan-actions .btn{font-size:13px;padding:10px 18px}
 </style>
 </head>
 <body>
-<div class="header"><div class="header-logo">🏛️</div><div><h1>Генератор заявок</h1><p>Mavis Group — автозаполнение заявок на сертификацию</p></div></div>
+<div class="header">
+<div class="header-logo">🏛️</div>
+<div style="flex:1"><h1>MG Tools</h1><p>Mavis Group — инструменты эксперта</p></div>
+<div class="module-tabs">
+<button class="mod-tab active" id="tabZayavki" onclick="switchModule('zayavki')">📋 Заявки</button>
+<button class="mod-tab" id="tabScan" onclick="switchModule('scan')">🔍 Сканы</button>
+</div>
+</div>
+<div id="moduleZayavki">
 <div class="steps" id="stepsBar"></div><div class="content" id="app"></div>
+</div>
+<div id="moduleScan" style="display:none">
+<div class="content" id="scanApp"></div>
+</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.min.js"></script>
@@ -247,6 +276,190 @@ function selStd(id){S.cert.standard=id;const s=CERTS.find(x=>x.id===id);if(s){S.
 async function doBx(){if(!S.bxS||S.bxS.length<2)return;S.bxL=true;render();S.bxR=await searchUsers(S.bxS);S.bxL=false;render()}
 async function doGen(){S.gen=true;S.done=false;render();try{let doc,pfx='Заявка',isTemplate=false;if(S.appType==='bsc'){doc=genBSC(S.company,S.iso,S.responsible);pfx='Заявка_БСЦ'}else if(S.appType==='beltechexpert'){doc=genBTE(S.company,S.iso,S.responsible);pfx='Заявка_БелТехЭкспертиза'}else if(S.appType==='cert_metal'){const blob=await genCertFromTemplate(S.company,S.cert,S.responsible);pfx='Заявка_серт_'+(CERTS.find(s=>s.id===S.cert.standard)?.label||'').replace(/\s/g,'_');saveAs(blob,pfx+'_'+(S.company.companyName||'').replace(/[«»"']/g,'').substring(0,30)+'.docx');S.done=true;S.gen=false;render();return}else if(S.appType==='stroycomplex'){doc=genSK(S.company,S.spk,S.sw,S.responsible);pfx='Заявка_Стройкомплекс_СПК'}else if(S.appType==='bisp'){doc=genBISP(S.company,S.spk,S.sw,S.responsible);pfx='Заявка_БИСП_СПК'}const buf=await docx.Packer.toBlob(doc);saveAs(buf,pfx+'_'+(S.company.companyName||'').replace(/[«»"']/g,'').substring(0,30)+'.docx');S.done=true}catch(e){alert('Ошибка: '+e.message)}S.gen=false;render()}
 function E(s){return(s||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;')}
+
+// ===================== MODULE SWITCHER =====================
+function switchModule(mod){
+  document.getElementById('moduleZayavki').style.display=mod==='zayavki'?'':'none';
+  document.getElementById('moduleScan').style.display=mod==='scan'?'':'none';
+  document.getElementById('tabZayavki').classList.toggle('active',mod==='zayavki');
+  document.getElementById('tabScan').classList.toggle('active',mod==='scan');
+  if(mod==='scan')renderScan();
+}
+
+// ===================== SCAN ENHANCER =====================
+let scanState={img:null,fileName:'',brightness:0,contrast:30,sharpness:30,whiten:20};
+
+function renderScan(){
+  const el=document.getElementById('scanApp');
+  if(!scanState.img){
+    el.innerHTML=`
+    <div class="card">
+      <div class="card-title">🔍 Улучшатель сканов</div>
+      <div class="card-sub">Загрузите скан документа (диплом, трудовая, паспорт и т.д.) для улучшения качества</div>
+      <div class="scan-zone" id="scanDz" onclick="document.getElementById('scanFi').click()">
+        <input type="file" id="scanFi" accept="image/*,.pdf" hidden>
+        <div class="upload-icon">📷</div>
+        <div class="upload-title">Загрузите скан</div>
+        <div class="upload-sub">JPG, PNG или перетащите файл</div>
+      </div>
+    </div>`;
+    const z=document.getElementById('scanDz'),fi=document.getElementById('scanFi');
+    z.ondragover=e=>{e.preventDefault();z.classList.add('drag')};
+    z.ondragleave=()=>z.classList.remove('drag');
+    z.ondrop=e=>{e.preventDefault();z.classList.remove('drag');loadScanFile(e.dataTransfer.files[0])};
+    fi.onchange=()=>loadScanFile(fi.files[0]);
+    return;
+  }
+  
+  el.innerHTML=`
+  <div class="card">
+    <div class="card-title">🔍 Улучшатель сканов</div>
+    <div class="scan-actions">
+      <button class="btn btn-p" onclick="autoEnhance()">⚡ Авто-улучшение</button>
+      <button class="btn btn-s" onclick="resetSliders()">↩️ Сброс</button>
+      <button class="btn btn-gen" onclick="downloadScan()">📥 Скачать результат</button>
+      <button class="btn btn-s" onclick="scanState.img=null;renderScan()">🗑️ Другой файл</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">⚙️ Настройки</div>
+    <div class="slider-row">
+      <label>Яркость</label>
+      <input type="range" min="-100" max="100" value="${scanState.brightness}" oninput="scanState.brightness=+this.value;this.nextElementSibling.textContent=this.value;applyScan()">
+      <span class="val">${scanState.brightness}</span>
+    </div>
+    <div class="slider-row">
+      <label>Контраст</label>
+      <input type="range" min="-100" max="100" value="${scanState.contrast}" oninput="scanState.contrast=+this.value;this.nextElementSibling.textContent=this.value;applyScan()">
+      <span class="val">${scanState.contrast}</span>
+    </div>
+    <div class="slider-row">
+      <label>Резкость</label>
+      <input type="range" min="0" max="100" value="${scanState.sharpness}" oninput="scanState.sharpness=+this.value;this.nextElementSibling.textContent=this.value;applyScan()">
+      <span class="val">${scanState.sharpness}</span>
+    </div>
+    <div class="slider-row">
+      <label>Выбеливание фона</label>
+      <input type="range" min="0" max="100" value="${scanState.whiten}" oninput="scanState.whiten=+this.value;this.nextElementSibling.textContent=this.value;applyScan()">
+      <span class="val">${scanState.whiten}</span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="scan-preview">
+      <div class="scan-img-wrap">
+        <div class="scan-label">Оригинал</div>
+        <img id="scanOrig" src="${scanState.img}">
+      </div>
+      <div class="scan-img-wrap">
+        <div class="scan-label">Результат</div>
+        <canvas id="scanCanvas"></canvas>
+      </div>
+    </div>
+  </div>`;
+  
+  setTimeout(()=>applyScan(),100);
+}
+
+function loadScanFile(file){
+  if(!file)return;
+  scanState.fileName=file.name.replace(/\.[^.]+$/,'')+'_enhanced';
+  const reader=new FileReader();
+  reader.onload=e=>{
+    scanState.img=e.target.result;
+    scanState.brightness=0;scanState.contrast=30;scanState.sharpness=30;scanState.whiten=20;
+    renderScan();
+  };
+  reader.readAsDataURL(file);
+}
+
+function autoEnhance(){
+  scanState.brightness=10;scanState.contrast=40;scanState.sharpness=40;scanState.whiten=35;
+  renderScan();
+}
+
+function resetSliders(){
+  scanState.brightness=0;scanState.contrast=0;scanState.sharpness=0;scanState.whiten=0;
+  renderScan();
+}
+
+function applyScan(){
+  const canvas=document.getElementById('scanCanvas');
+  const origImg=document.getElementById('scanOrig');
+  if(!canvas||!origImg||!origImg.complete)return;
+  
+  const img=new Image();
+  img.onload=()=>{
+    canvas.width=img.width;canvas.height=img.height;
+    const ctx=canvas.getContext('2d');
+    ctx.drawImage(img,0,0);
+    
+    const imageData=ctx.getImageData(0,0,canvas.width,canvas.height);
+    const data=imageData.data;
+    
+    const br=scanState.brightness/100*255;
+    const ct=scanState.contrast/100;
+    const factor=(259*(ct*255+255))/(255*(259-ct*255));
+    const wh=scanState.whiten/100;
+    
+    for(let i=0;i<data.length;i+=4){
+      let r=data[i],g=data[i+1],bl=data[i+2];
+      
+      // Brightness
+      r+=br;g+=br;bl+=br;
+      
+      // Contrast
+      r=factor*(r-128)+128;
+      g=factor*(g-128)+128;
+      bl=factor*(bl-128)+128;
+      
+      // Whiten background (push light grays to white)
+      if(wh>0){
+        const avg=(r+g+bl)/3;
+        if(avg>140){
+          const push=wh*(avg-140)/115;
+          r=r+(255-r)*push;
+          g=g+(255-g)*push;
+          bl=bl+(255-bl)*push;
+        }
+      }
+      
+      data[i]=Math.max(0,Math.min(255,r));
+      data[i+1]=Math.max(0,Math.min(255,g));
+      data[i+2]=Math.max(0,Math.min(255,bl));
+    }
+    
+    ctx.putImageData(imageData,0,0);
+    
+    // Sharpness (unsharp mask approximation)
+    if(scanState.sharpness>0){
+      const sh=scanState.sharpness/100;
+      const tmpCanvas=document.createElement('canvas');
+      tmpCanvas.width=canvas.width;tmpCanvas.height=canvas.height;
+      const tmpCtx=tmpCanvas.getContext('2d');
+      tmpCtx.filter=`blur(1px)`;
+      tmpCtx.drawImage(canvas,0,0);
+      const blurred=tmpCtx.getImageData(0,0,canvas.width,canvas.height);
+      const sharp=ctx.getImageData(0,0,canvas.width,canvas.height);
+      const sd=sharp.data;const bd=blurred.data;
+      for(let i=0;i<sd.length;i+=4){
+        sd[i]=Math.max(0,Math.min(255,sd[i]+sh*2*(sd[i]-bd[i])));
+        sd[i+1]=Math.max(0,Math.min(255,sd[i+1]+sh*2*(sd[i+1]-bd[i+1])));
+        sd[i+2]=Math.max(0,Math.min(255,sd[i+2]+sh*2*(sd[i+2]-bd[i+2])));
+      }
+      ctx.putImageData(sharp,0,0);
+    }
+  };
+  img.src=scanState.img;
+}
+
+function downloadScan(){
+  const canvas=document.getElementById('scanCanvas');
+  if(!canvas)return;
+  canvas.toBlob(blob=>{
+    saveAs(blob,(scanState.fileName||'scan_enhanced')+'.png');
+  },'image/png');
+}
+
 render();
 </script>
 </body>
