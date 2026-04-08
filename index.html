@@ -41,7 +41,7 @@ const EXCL='п.8.3 «Проектирование и разработка про
 const CERTS=[{id:'gost_23118',label:'ГОСТ 23118-2025',fn:'Конструкции стальные строительные. Общие технические условия',prod:'Конструкции стальные строительные',tv:'7308',okp:'25.11.10',tr:'ТР 2009/013/BY'},{id:'stb_1396',label:'СТБ 1396-2003',fn:'Фермы стропильные стальные для производственных зданий. Общие технические условия',prod:'Фермы стропильные стальные для производственных зданий',tv:'7308',okp:'25.11.23',tr:'ТР 2025/013/BY'},{id:'stb_1317',label:'СТБ 1317-2002',fn:'Конструкции стальные строительные сварные. Общие технические условия',prod:'Конструкции стальные строительные сварные',tv:'7308',okp:'25.11.10',tr:'ТР 2009/013/BY'},{id:'stb_1381',label:'СТБ 1381-2003',fn:'Балки стропильные и подстропильные стальные. Общие технические условия',prod:'Балки стропильные и подстропильные стальные',tv:'7308',okp:'25.11.23',tr:'ТР 2009/013/BY'},{id:'stb_2174',label:'СТБ 2174-2011',fn:'Конструкции строительные стальные лёгкие. Общие технические условия',prod:'Конструкции строительные стальные лёгкие',tv:'7308',okp:'25.11.10',tr:'ТР 2025/013/BY'}];
 const W=[{id:'w1',c:'Устройство оснований фундаментов и земляных сооружений',t:'СП 5.01.02-2023',s:'Вертикальная планировка, разработка выемок и котлованов; Водопонижение, организация поверхностного стока, дренаж; Устройство насыпей и обратных засыпок; Гидромеханизированные и дноуглубительные работы; Устройство армированных оснований; Устройство оснований из грунтов, уплотненных тяжелыми трамбовками',k:'СП 1.03.14-2024, СТБ 1377-2003'},{id:'w2',c:'Устройство оснований фундаментов (плитные, свайные)',t:'СП 5.01.02-2023',s:'Устройство плитных фундаментов; Устройство свайных фундаментов; Устройство щелевых фундаментов; Устройство фундаментов в пучинистых грунтах',k:'СП 1.03.14-2024'},{id:'w3',c:'Устройство оснований фундаментов (стена в грунте)',t:'П14-01 к СНБ 5.01.01-99, СП 5.01.02-2023',s:'Траншейные и свайные стены методом «стена в грунте»',k:'СП 1.03.14-2024'},{id:'w4',c:'Возведение монолитных бетонных и ж/б конструкций',t:'СН 1.03.01-2019',s:'Опалубочные работы; Арматурные работы; Бетонные работы; Специальные методы бетонирования; Бетонные работы при высокой температуре; Бетонные работы при отрицательных температурах; Уход за бетоном; Распалубка',k:'СП 1.03.09-2023'},{id:'w5',c:'Монтаж сборных бетонных и ж/б конструкций',t:'СН 1.03.01-2019',s:'Монтаж блоков фундаментов; Монтаж колонн, рам, полурам; Монтаж ригелей, балок, ферм, плит; Монтаж панелей стен; Монтаж вентблоков, шахт лифтов, лестничных маршей; Сварка стальных элементов стыков; Замоноличивание стыков; Теплоизоляция стыков',k:'СП 1.03.09-2023'},{id:'w6',c:'Монтаж стальных конструкций',t:'СН 1.03.01-2019',s:'Подготовительные работы; Укрупнительная сборка; Монтаж колонн; Монтаж подкрановых балок; Монтаж покрытия; Соединения на болтах; Соединения на высокопрочных болтах; Монтаж стальных конструкций зданий',k:'СП 1.03.10-2023'},{id:'w7',c:'Возведение каменных и армокаменных конструкций',t:'СН 1.03.01-2019',s:'Кладка из кирпича; Арки и перемычки; Стены из мелких блоков; Кладка при отрицательных температурах; Кладка при высокой температуре',k:'СП 1.03.13-2024'},{id:'w8',c:'Монтаж деревянных конструкций',t:'СН 1.03.01-2019',s:'Производство монтажных работ',k:'СП 1.03.10-2023'},{id:'w9',c:'Монтаж легких ограждающих конструкций',t:'СН 1.03.01-2019',s:'Монтаж гипсобетонных перегородок; Монтаж каркасно-обшивных перегородок; Монтаж стен из металлических панелей; Монтаж конструкций из асбестоцементных панелей',k:'СП 1.03.10-2023'},{id:'w10',c:'Устройство антикоррозионных покрытий',t:'ТКП 45-5.09-33-2006',s:'Лакокрасочные; Мастичные, шпатлевочные; Оклеечные; Облицовочные; Гуммировочные; Металлизационные; Комбинированные',k:'СТБ 1684-2006, ГОСТ 9.916-2023'},{id:'w11',c:'Устройство кровель',t:'СН 5.08.01-2019',s:'Кровли из рулонных и мастичных материалов; Кровли из мелкоштучных материалов; Кровли из профнастила и металлочерепицы; Кровли из светопрозрачных материалов',k:'СП 1.03.05-2023'},{id:'w12',c:'Изоляционные покрытия',t:'ТКП 45-5.08-75-2007',s:'Гидроизоляция из рулонных материалов; Окрасочная гидроизоляция; Гидроизоляция из цементных растворов; Гидроизоляция из металлических листов; Тепло- и звукоизоляция',k:'СТБ 1846-2008'},{id:'w13',c:'Устройство тепловой изоляции наружных ограждающих конструкций',t:'СП 1.03.03-2022',s:'Штукатурные системы утепления; Вентилируемые системы утепления; Системы утепления крыш и перекрытий',k:'СП 1.03.04-2022'},{id:'w14',c:'Устройство тепловой изоляции оборудования и трубопроводов',t:'СП 4.02.04-2023',s:'',k:'СП 4.02.09-2024'},{id:'w15',c:'Заполнение оконных и дверных проемов',t:'СП 3.02.08-2024',s:'Установка оконных и дверных блоков; Устройство монтажных швов; Установка отливов; Установка подоконной доски; Отделка откосов',k:'СТБ 1476-2004, СП 1.03.15-2024'},{id:'w16',c:'Штукатурные работы',t:'СП 1.03.01-2019',s:'',k:'СП 1.03.07-2023'},{id:'w17',c:'Облицовочные работы',t:'СП 1.03.01-2019',s:'',k:'СП 1.03.07-2023'},{id:'w18',c:'Декоративные отделочные работы',t:'СП 1.03.01-2019',s:'',k:'СП 1.03.07-2023'},{id:'w19',c:'Малярные работы',t:'СП 1.03.01-2019',s:'',k:'СП 1.03.07-2023'},{id:'w20',c:'Обойные работы',t:'СП 1.03.01-2019',s:'',k:'СП 1.03.07-2023'},{id:'w21',c:'Стекольные работы',t:'СП 1.03.01-2019',s:'Установка листового стекла, стеклоблоков, стеклопакетов',k:'СП 1.03.07-2023'},{id:'w22',c:'Устройство полов',t:'СП 1.03.01-2019',s:'Устройство грунтового основания; Бетонный подстилающий слой; Стяжка; Гидроизоляция пола; Тепло- и звукоизоляция; Монолитные покрытия; Покрытия из древесины; Покрытия из плиточных материалов',k:'СП 1.03.06-2023'},{id:'w23',c:'Устройство дорожных одежд из плит тротуарных',t:'СП 3.02.10-2025',s:'Подготовительные работы; Устройство слоев оснований; Земляное полотно; Бортовой камень и покрытие из плит тротуарных',k:'СП 1.03.17-2025'},{id:'w24',c:'Благоустройство территории. Озеленение',t:'СП 3.02.09-2025',s:'Подготовка территорий; Посадка деревьев и кустарников; Создание газонов; Создание цветников',k:'СП 3.02.09-2025, СП 1.03.17-2025'},{id:'w25',c:'Благоустройство территории. Ограды',t:'СП 3.02.09-2025',s:'Устройство временных оград; Устройство постоянных оград',k:'СП 3.02.09-2025'},{id:'w26',c:'Устройство асфальтобетонных покрытий',t:'СП 3.02.10-2025',s:'Устройство асфальтобетонных покрытий',k:'СП 1.03.17-2025'},{id:'w27',c:'Монтаж внутренних систем: холодное и горячее водоснабжение',t:'СП 1.03.02-2020',s:'',k:'СП 4.01.08-2024'},{id:'w28',c:'Монтаж внутренних систем: канализация и водостоки',t:'СП 1.03.02-2020',s:'',k:'СП 4.01.08-2024'},{id:'w29',c:'Монтаж внутренних систем: вентиляция и кондиционирование',t:'СП 1.03.02-2020',s:'',k:'СП 4.02.07-2024'},{id:'w30',c:'Монтаж внутренних систем: отопление, теплоснабжение',t:'СП 1.03.02-2020',s:'',k:'СП 4.02.08-2024'},{id:'w31',c:'Монтаж внутренних систем: тепловые пункты и котельные',t:'СП 1.03.02-2020',s:'',k:'СТБ 1999-2009, СТБ 2020-2009'},{id:'w32',c:'Монтаж приборов учёта тепла',t:'ГОСТ EN 1434-6-2018',s:'',k:'ГОСТ 26433.0-85, ГОСТ 26433.2-94'},{id:'w33',c:'Монтаж наружных сетей водоснабжения и канализации',t:'СП 4.01.06-2024',s:'Разбивка трассы; Земляные работы; Монтаж трубопроводов; Монтаж арматуры; Переходы через преграды; Сооружения; Испытания',k:'СП 4.01.07-2024'},{id:'w34',c:'Монтаж тепловых сетей',t:'СП 4.02.01-2020',s:'',k:'СТБ 2116-2010'},{id:'w35',c:'Монтаж внутренних систем: газоснабжение',t:'СП 1.03.02-2020, СНиП 3.05.02-88',s:'Внутренние устройства газоснабжения; Дымовые трубы',k:'СТБ 1133-98, СТБ 2020-2009, СТБ 2039-2010, CТБ 2069-2010'},{id:'w36',c:'Монтаж наружных газопроводов',t:'СП 4.03.01-2020, СНиП 3.05.02-88',s:'Земляные работы; Сварка стальных газопроводов; Сварка ПЭ газопроводов',k:'CТБ 2069-2010'},{id:'w37',c:'Монтаж электротехнических устройств (внутренние)',t:'СП 4.04.06-2024, ПУЭ',s:'Контактные соединения; Электропроводка; Электрическое освещение; Заземляющие устройства',k:'ГОСТ 26433.0-85, ГОСТ 26433.2-94'},{id:'w38',c:'Монтаж электротехнических устройств (наружные)',t:'СП 4.04.06-2024, ТКП 339-2022, ПУЭ',s:'Контактные соединения; Электропроводка; Кабельные линии; Воздушные линии; Распределительные устройства и подстанции; Электросиловые установки',k:'ГОСТ 26433.0-85, ГОСТ 26433.2-94'},{id:'w39',c:'Электроустановки на напряжение до 750 кВ',t:'ТКП 339-2022, ПУЭ',s:'Линии электропередачи; Распределительные устройства; Электросиловые установки; Электроустановки жилых зданий',k:'ГОСТ 26433.0-85, ГОСТ 26433.2-94'},{id:'w40',c:'Линейно-кабельные сооружения электросвязи',t:'СН 4.04.06-2025',s:'Прокладка кабелей в грунте; В кабельной канализации; В коллекторах; Кабельные переходы; Вводы кабелей; Оконечные устройства; Пассивные оптические сети; Системы кабельного ТВ; Защита кабельных линий; Заземление',k:'ГОСТ 26433.0-85, ГОСТ 26433.2-94'},{id:'w41',c:'Системы автоматизации',t:'СНиП 3.05.07-85',s:'Системы контроля, управления и автоматического регулирования',k:'ГОСТ 26433.0-85, ГОСТ 26433.2-94'},{id:'w42',c:'Системы связи и диспетчеризации',t:'СН 4.04.02-2019',s:'Сеть стационарной электросвязи; Кабельное ТВ; Домофонная связь; ЛВС; Диспетчеризация; Молниезащита и заземление',k:'ГОСТ 26433.0-85, ГОСТ 26433.2-94'},{id:'w43',c:'Геодезические работы',t:'СН 1.03.02-2019',s:'Геодезическая разбивочная основа; Геодезические работы при устройстве фундаментов; При возведении надземной части; Контроль точности; Работы при прокладке трасс; Исполнительные съемки; Наблюдения за деформациями',k:'ГОСТ 26433.0-85, ГОСТ 26433.2-94'},{id:'w44',c:'Монтаж технологического оборудования и трубопроводов',t:'ТКП 45-3.05-166-2009, ТКП 45-3.05-167-2009',s:'Монтаж оборудования; Аппараты колонного типа; Компрессоры и насосы; Печи и мельницы; Холодильные установки; Теплообменные аппараты; Перемешивающие устройства; Сушильные аппараты; Фильтры; Центрифуги; Узлы трубопроводов; Монтаж трубопроводов',k:'ГОСТ 26433.0-85, ГОСТ 26433.1-89, ГОСТ 26433.2-94'}];
 
-let S={step:0,company:{},appType:'bsc',iso:{consultant:'Клепицкая Виктория Александровна',scope:'выполнение функций генерального подрядчика, производство строительно-монтажных работ',yearImplemented:'2026',subdivisions:'нет',prevCert:'нет'},cert:{standard:'',productName:'',tnved:'',okp:'',production:'Серийно',scheme:'1С'},spk:{outNumber:'',outDate:'',headPosition:'',headName:''},sw:new Set(),responsible:{},bxS:'',bxR:[],bxL:false,gen:false,done:false,ws:''};
+let S={step:0,company:{},appType:'bsc',iso:{consultant:'Клепицкая Виктория Александровна',scope:'выполнение функций генерального подрядчика, производство строительно-монтажных работ',yearImplemented:'2026',subdivisions:'нет',prevCert:'нет'},cert:{standard:'',productName:'',tnved:'',okp:'',production:'Серийно',scheme:'1С'},spk:{headPosition:'',headName:''},sw:new Set(),responsible:{},bxS:'',bxR:[],bxL:false,gen:false,done:false,ws:'',kpMsg:''};
 
 // BITRIX
 async function bxCall(m,p={}){const u=new URL(BX+m);Object.entries(p).forEach(([k,v])=>u.searchParams.set(k,v));return(await fetch(u.toString())).json()}
@@ -49,44 +49,44 @@ async function searchUsers(q){try{const d=await bxCall('user.search',{FIND:q});r
 
 // PARSER
 async function parseInvoice(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=async e=>{try{const result=await mammoth.extractRawText({arrayBuffer:e.target.result});const text=result.value;const d={};
-// Detect document type: invoice (Счёт-заказ) or contract (Договор)
-const isContract=text.includes('ДОГОВОР ВОЗМЕЗДНОГО ОКАЗАНИЯ УСЛУГ')||text.includes('ДОГОВОР');
-// Abbreviation expander
+const isContract=text.includes('ДОГОВОР ВОЗМЕЗДНОГО ОКАЗАНИЯ УСЛУГ')||text.includes('ДОГОВОР ');
 const expandAbbr=(name)=>{if(!name)return name;return name.replace(/^ООО\s/,'Общество с ограниченной ответственностью ').replace(/^ОАО\s/,'Открытое акционерное общество ').replace(/^ЗАО\s/,'Закрытое акционерное общество ').replace(/^ЧП\s/,'Частное предприятие ').replace(/^ЧУП\s/,'Частное унитарное предприятие ').replace(/^ЧТУП\s/,'Частное торговое унитарное предприятие ').replace(/^ЧСУП\s/,'Частное строительное унитарное предприятие ').replace(/^РУП\s/,'Республиканское унитарное предприятие ').replace(/^КУП\s/,'Коммунальное унитарное предприятие ').replace(/^ИП\s/,'Индивидуальный предприниматель ')};
-if(isContract){
-// Parse contract: find Заказчик section in requisites (section 8)
-const reqSection=text.split(/ЮРИДИЧЕСКИЕ АДРЕСА|РЕКВИЗИТЫ И ПОДПИСИ/i).pop()||text;
-const parts=reqSection.split(/Заказчик:/i);const right=parts.length>1?parts[1]:reqSection;
-// Company name from contract preamble: "и COMPANY_NAME, в лице..."
-let m;if(m=text.match(/именуемое в дальнейшем «Исполнитель»[^]*?и\s+(.+?)\s*,\s*в лице/i))d.companyName=expandAbbr(m[1].replace(/\*+/g,'').trim());
-// Director from contract preamble: "в лице Директора FULL_NAME"
-if(m=text.match(/«Заказчик»[^]*?в лице\s+(\S+)\s+(.+?),\s*действующ/i)){d.directorPosition=m[1].trim();d.directorFullName=m[2].trim();d.directorName=m[2].trim().split(' ').map((w,i)=>i===0?w:w[0]+'.').join(' ')}
-// Requisites from right column
-if(m=right.match(/Юридический адрес:\s*(.+?)(?=\n|Почтовый)/si))d.legalAddress=m[1].trim();
-if(m=right.match(/р\/с[:\s]*(\S+)/i))d.bankAccount=m[1].trim();
-if(m=right.match(/в\s+(.+?),\s*БИК\s+(\S+)/i)){d.bankName=m[1].trim();d.bik=m[2].trim()}
-if(m=right.match(/Адрес банка:\s*(.+?)(?=\n|УНП)/si))d.bankAddress=m[1].trim();
-if(m=right.match(/УНП\s+(\d+)/))d.unp=m[1].trim();
-if(m=right.match(/Тел[\.\/ф]*[:\s]*(.+?)(?=\n|e-mail)/si))d.phone=m[1].trim();
-if(m=right.match(/e-mail:\s*(\S+)/i))d.email=m[1].trim();
-}else{
-// Parse invoice (Счёт-заказ)
-const parts=text.split(/Заказчик:/i);const right=parts.length>1?parts[1]:text;const lines=right.split('\n').map(l=>l.trim()).filter(Boolean);if(lines[0])d.companyName=expandAbbr(lines[0]);
-let m;if(m=right.match(/Юридический адрес:\s*(.+?)(?=\n|Почтовый)/si))d.legalAddress=m[1].trim();
-if(m=right.match(/р\/с[:\s]*(\S+)/i))d.bankAccount=m[1].trim();
-if(m=right.match(/в\s+(.+?),\s*БИК\s+(\S+)/i)){d.bankName=m[1].trim();d.bik=m[2].trim()}
-if(m=right.match(/Адрес банка:\s*(.+?)(?=\n|УНП)/si))d.bankAddress=m[1].trim();
-if(m=right.match(/УНП\s+(\d+)/))d.unp=m[1].trim();
-if(m=right.match(/Тел\.?:\s*(.+?)(?=\n|e-mail)/si))d.phone=m[1].trim();
-if(m=right.match(/e-mail:\s*(\S+)/i))d.email=m[1].trim();
-// Director: look in Заказчик signature block (right side), skip Клепицкая (our director)
-const sigBlock=right.match(/(?:Директор|директор)\s*\n?\s*[\\_]*\s*\n?\s*(.+)/);
-if(sigBlock){const dirName=sigBlock[1].trim();if(!dirName.includes('Клепицк'))d.directorName=dirName}
-// Also try from the table header "Заказчик" → "Подпись" → position → name
-if(!d.directorName||d.directorName.includes('Клепицк')){if(m=text.match(/Заказчик[\s\S]*?Подпись[\s\S]*?\n\s*(\S+)\s*\n\s*(.+)/)){const pos=m[1].trim();const name=m[2].trim();if(!name.includes('Клепицк')){d.directorPosition=pos;d.directorName=name}}}
+// Split text at last "Заказчик:" to get customer requisites
+const lastIdx=text.lastIndexOf('Заказчик:');
+const right=lastIdx>=0?text.substring(lastIdx+9):'';
+let m;
+if(isContract&&right){
+// Contract: company name is first non-empty line after "Заказчик:"
+const cLines=right.split('\n').map(l=>l.trim()).filter(l=>l&&l.length>2);
+if(cLines[0])d.companyName=expandAbbr(cLines[0]);
+// Director from preamble: "и COMPANY, в лице Директора FULLNAME, действующ"
+if(m=text.match(/«Заказчик»[\s\S]*?в\s+лице\s+(\S+)\s+([^,]+),\s*действующ/i)){d.directorPosition=m[1].trim();d.directorFullName=m[2].trim();d.directorName=m[2].trim().split(/\s+/).map((w,i)=>i===0?w:w[0]+'.').join(' ')}
+// Also check end of file for "Директор ___ Name"
+if(!d.directorName){if(m=right.match(/Директор[\s_]+([А-ЯЁа-яё]+\s+[А-ЯЁ]\.[А-ЯЁ]\.)/)){d.directorName=m[1].trim();d.directorPosition='Директор'}}
+}else if(right){
+// Invoice: company name is first non-empty line after "Заказчик:"
+const cLines=right.split('\n').map(l=>l.trim()).filter(l=>l&&l.length>2);
+if(cLines[0])d.companyName=expandAbbr(cLines[0]);
+// Director from end of file: "Заказчик\n...\nДиректор\n...\nName"
+if(m=text.match(/Заказчик\s*\n[\s\n]*Подпись[\s\n]*([\s\S]*?)_/)){
+const sigBlock=m[1];const sigLines=sigBlock.split('\n').map(l=>l.trim()).filter(l=>l&&l.length>1);
+if(sigLines.length>=2){d.directorPosition=sigLines[0];d.directorName=sigLines[1]}
+else if(sigLines.length===1){d.directorPosition='Директор';d.directorName=sigLines[0]}
 }
+// Director from end of file: find ALL "Директор" followed by a name, take last non-Клепицкая
+if(!d.directorName){const dirPattern=/Директор[\s_]*\n*\s*\n*([А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.[А-ЯЁ]\.)/g;let dm;let lastGoodDir=null;while(dm=dirPattern.exec(text)){const nm=dm[1].trim();if(!nm.includes('Клепицк'))lastGoodDir=nm}if(lastGoodDir){d.directorName=lastGoodDir;d.directorPosition='Директор'}}
+}
+// Common parsing for both types from right block
+if(m=right.match(/Юридический адрес:\s*(.+?)(?=\n|Почтовый)/si))d.legalAddress=m[1].trim();
+if(m=right.match(/р\/с[:\s]*([A-Z0-9\s]+?)(?=\n)/i))d.bankAccount=m[1].trim().replace(/\s+/g,' ');
+if(m=right.match(/в\s+(.+?),\s*БИК\s+(\S+)/i)){d.bankName=m[1].trim();d.bik=m[2].trim()}
+if(m=right.match(/Адрес банка:\s*(.+?)(?=\n)/si))d.bankAddress=m[1].trim();
+if(m=right.match(/УНП\s+(\d+)/))d.unp=m[1].trim();
+if(m=right.match(/Тел[\.\/ф]*[:\s]+([+\d\s\-()]+)/i))d.phone=m[1].trim();
+if(m=right.match(/e-mail:\s*(\S+)/i))d.email=m[1].trim();
 if(!d.directorPosition)d.directorPosition='Директор';
-if(d.companyName)d.companyName=expandAbbr(d.companyName);
+// Filter out Клепицкая from director
+if(d.directorName&&d.directorName.includes('Клепицк'))d.directorName='';
 res(d)}catch(err){rej(err)}};r.onerror=rej;r.readAsArrayBuffer(file)})}
 
 // DOCX HELPERS
@@ -118,6 +118,64 @@ const hdr=new TRw({children:[cl('Наименование работ',2500,1),cl
 const rows=W.filter(w=>sw.has(w.id)).map(w=>new TRw({children:[cl(w.c,2500),cl(w.t,2000),cl(w.s.split(';').join(';\n'),3000),cl(w.k,1800)]}));
 return new D({styles:{default:{document:{run:{font:'Times New Roman',size:22}}}},sections:[{properties:pg,children:[p([n('Республиканское унитарное предприятие')],{alignment:AT.RIGHT}),p([n('«Белорусский институт строительного проектирования» Управления делами Президента Республики Беларусь')],{alignment:AT.RIGHT}),p([n('220088, г. Минск, ул. Смоленская, 15')],{alignment:AT.RIGHT}),p([n('тел./факс: (017) 374 13 76; 395 28 93')],{alignment:AT.RIGHT}),p([n('е-mail: os@bisp.by')],{alignment:AT.RIGHT}),p([n('')]),p([b('З А Я В К А')],{alignment:AT.CENTER}),p([n('на освидетельствование системы производственного контроля')],{alignment:AT.CENTER}),p([n('')]),info,p([n('')]),new Table({width:{size:9300,type:WT.DXA},columnWidths:[2500,2000,3000,1800],rows:[hdr,...rows]}),p([n('')]),p([b('Обязуюсь:')]),p([n('- соблюдать требования Инструкции о порядке освидетельствования СПК (Постановление от 21.11.2025 № 136);')]),p([n('- оплачивать расходы, связанные с освидетельствованием и периодической оценкой.')]),p([n('')]),p([b('Руководитель несет ответственность за достоверность представленной информации.')]),p([n('')]),p([n((spk.headPosition||dp)+'                    ________________                    '+(spk.headName||d))]),p([n('М.П.                             личная подпись                 расшифровка подписи')]),p([n('                                   «    » 202___г.')])]}]});}
 
+// KP PARSER - auto-select work types from commercial proposal
+async function parseKP(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=async e=>{try{const result=await mammoth.extractRawText({arrayBuffer:e.target.result});const text=result.value.toLowerCase();
+// Keyword mapping: work catalog id -> keywords to search in KP text
+const kwMap={
+w1:['земляных сооружений','вертикальная планировка','котлованов','водопонижение','насыпей'],
+w2:['плитных фундаментов','свайных фундаментов','щелевых фундаментов'],
+w3:['стена в грунте'],
+w4:['монолитных бетонных','опалубочные','арматурные','бетонные работы','бетонирован'],
+w5:['сборных бетонных','монтаж блоков фундаментов','монтаж колонн','монтаж ригелей','монтаж панелей'],
+w6:['стальных конструкций','монтаж подкрановых','укрупнительная сборка'],
+w7:['каменных','армокаменных','кладка из кирпича','стены из мелких блоков'],
+w8:['деревянных конструкций'],
+w9:['легких ограждающих','гипсобетонных перегородок','каркасно-обшивных'],
+w10:['антикоррозионных покрытий','лакокрасочные','гуммировочные','металлизационные'],
+w11:['устройство кровель','кровли из рулонных','кровли из мелкоштучных','металлочерепиц'],
+w12:['изоляционные покрытия','гидроизоляци'],
+w13:['тепловой изоляции наружных','штукатурных систем утепления','вентилируемых систем утепления'],
+w14:['тепловой изоляции оборудования','тепловой изоляции трубопроводов'],
+w15:['оконных и дверных проёмов','оконных и дверных проемов','оконных проёмов','дверных проёмов','заполнение оконных','заполнение дверных','устройство откосов'],
+w16:['штукатурных работ','штукатурные работы'],
+w17:['облицовочных работ','облицовочные работы'],
+w18:['декоративных отделочных','декоративные отделочные'],
+w19:['малярных работ','малярные работы'],
+w20:['обойных работ','обойные работы'],
+w21:['стекольных работ','стекольные работы'],
+w22:['устройство полов','устройство грунтового основания','устройство стяжки','гидроизоляции пола','покрытий полов','плиточных материалов','самонивелирующихся'],
+w23:['дорожных одежд','плит тротуарных','бортового камня'],
+w24:['озеленение','посадка деревьев','создание газонов','создание цветников'],
+w25:['устройство оград','временных оград','постоянных оград'],
+w26:['асфальтобетонных покрытий'],
+w27:['холодное и горячее водоснабжение','холодного водоснабжения','горячего водоснабжения'],
+w28:['канализация и водостоки','канализации'],
+w29:['вентиляция и кондиционирование','вентиляци','кондиционирован'],
+w30:['отопление','теплоснабжение'],
+w31:['тепловые пункты','котельные'],
+w32:['приборов учёта тепла','приборов учета тепла'],
+w33:['наружных сетей водоснабжения','наружных сетей канализации'],
+w34:['тепловых сетей'],
+w35:['газоснабжение','газоснабжения'],
+w36:['наружных газопроводов'],
+w37:['электротехнических устройств','электропроводка','электрическое освещение'],
+w38:['кабельные линии','воздушные линии электропередачи'],
+w39:['электроустановки на напряжение'],
+w40:['кабельные сооружения электросвязи','прокладка кабелей'],
+w41:['системы автоматизации','автоматического регулирования'],
+w42:['системы связи','диспетчеризаци','домофонной связи','кабельного телевидения'],
+w43:['геодезические работы','геодезическ'],
+w44:['технологического оборудования','монтаж компрессоров','монтаж насосов','монтаж фильтров']
+};
+const matched=new Set();
+for(const[wid,keywords]of Object.entries(kwMap)){
+if(keywords.some(kw=>text.includes(kw)))matched.add(wid);
+}
+// Also check for "отделочные работы" as a group -> w16,w17,w18,w19,w20,w21
+if(text.includes('отделочные работы')){['w16','w17','w18','w19','w20','w21'].forEach(id=>matched.add(id))}
+res(matched)}catch(err){rej(err)}};r.onerror=rej;r.readAsArrayBuffer(file)})}
+async function handleKP(file){if(!file)return;const matched=await parseKP(file);matched.forEach(id=>S.sw.add(id));S.kpMsg='✅ Из КП подобрано работ: '+matched.size;render()}
+
 // RENDER
 function render(){document.getElementById('stepsBar').innerHTML=STEPS.map((n,i)=>`<div class="step-item ${S.step===i?'active':''} ${S.step>i?'done':''}" onclick="if(${i}<=${S.step}){S.step=${i};render()}">${n}</div>`).join('');const el=document.getElementById('app');[rUpload,rCompany,rType,rParams,rGenerate][S.step](el)}
 
@@ -131,7 +189,7 @@ function rType(el){el.innerHTML=`<div class="card"><div class="card-title">📝 
 function rParams(el){const f=(o,k,l,fw,ph)=>`<div class="field ${fw?'fw':''}"><label>${l}</label><input type="text" value="${E(S[o][k]||'')}" placeholder="${ph||''}" onchange="S['${o}']['${k}']=this.value"></div>`;const isI=S.appType==='bsc'||S.appType==='beltechexpert',isC=S.appType==='cert_metal',isS=S.appType==='stroycomplex'||S.appType==='bisp';
 const iH=isI?`<div class="card"><div class="card-title">📊 Сведения о системе менеджмента</div><div class="fg">${f('iso','yearImplemented','Год внедрения',0,'2026')}${f('iso','employeeCount','Количество работников',0,'15')}${f('iso','scope','Область применения',1,'производство строительно-монтажных работ')}${f('iso','consultant','Консультирование проводил',1,'Клепицкая Виктория Александровна')}${f('iso','subdivisions','Наличие обособленных подразделений',0,'нет')}${f('iso','prevCert','Предыдущий сертификат',0,'нет')}${f('iso','representative','Представитель руководства',1,'')}${f('iso','contactPerson','Контактное лицо',0,'')}${f('iso','contactPhone','Телефон контактного лица',0,'')}</div></div>`:'';
 const cH=isC?`<div class="card"><div class="card-title">⚙️ Данные для сертификации продукции</div><div class="fg"><div class="field fw"><label>Стандарт</label><select onchange="selStd(this.value)"><option value="">Выберите...</option>${CERTS.map(s=>`<option value="${s.id}" ${S.cert.standard===s.id?'selected':''}>${s.label} — ${s.fn}</option>`).join('')}</select></div>${f('cert','productName','Наименование продукции',1)}${f('cert','tnved','Код ТН ВЭД ЕАЭС')}${f('cert','okp','Код ОКП РБ')}<div class="field"><label>Выпускается</label><select onchange="S.cert.production=this.value"><option ${S.cert.production==='Серийно'?'selected':''}>Серийно</option><option ${S.cert.production==='Партия'?'selected':''}>Партия</option><option ${S.cert.production==='Единичное изделие'?'selected':''}>Единичное изделие</option></select></div>${f('cert','scheme','Схема сертификации',0,'1С')}</div></div>`:'';
-const sH=isS?`<div class="card"><div class="card-title">📑 Дополнительные данные для СПК</div><div class="fg">${f('spk','headPosition','Должность руководителя',0,'Директор')}${f('spk','headName','ФИО руководителя',0,'')}</div></div><div class="card"><div class="card-title">🔧 Виды работ (${S.sw.size} из ${W.length})</div><input class="search-input" placeholder="🔍 Поиск..." value="${E(S.ws)}" oninput="S.ws=this.value;render()"><div class="wt-list">${W.filter(w=>!S.ws||w.c.toLowerCase().includes(S.ws.toLowerCase())||w.s.toLowerCase().includes(S.ws.toLowerCase())).map(w=>`<div class="wt-item ${S.sw.has(w.id)?'checked':''}" onclick="tgW('${w.id}')"><input type="checkbox" ${S.sw.has(w.id)?'checked':''}><div><div class="wt-nm">${w.c}</div><div class="wt-tnpa">${w.t} → ${w.k}</div>${w.s?`<div class="wt-sub">${w.s.split(';').slice(0,3).join('; ')}${w.s.split(';').length>3?' ...':''}</div>`:''}</div></div>`).join('')}</div><div class="wt-count">Выбрано: ${S.sw.size} из ${W.length}</div></div>`:'';
+const sH=isS?`<div class="card"><div class="card-title">📑 Дополнительные данные для СПК</div><div class="fg">${f('spk','headPosition','Должность руководителя',0,'Директор')}${f('spk','headName','ФИО руководителя',0,'')}</div></div><div class="card"><div class="card-title">🔧 Виды работ (${S.sw.size} из ${W.length})</div><div class="card-sub">Выберите вручную или загрузите КП для автоподбора</div><div style="display:flex;gap:8px;margin-bottom:10px;align-items:center"><button class="btn-bx" onclick="document.getElementById('kpFile').click()" style="background:#7c3aed">📄 Загрузить КП</button><input type="file" id="kpFile" accept=".docx" hidden onchange="handleKP(this.files[0])"><button class="btn-bx" onclick="S.sw.clear();S.kpMsg='';render()" style="background:#94a3b8">Сбросить все</button>${S.kpMsg?'<span style="font-size:13px;color:#059669;font-weight:500">'+S.kpMsg+'</span>':''}</div><input class="search-input" placeholder="🔍 Поиск..." value="${E(S.ws)}" oninput="S.ws=this.value;render()"><div class="wt-list">${W.filter(w=>!S.ws||w.c.toLowerCase().includes(S.ws.toLowerCase())||w.s.toLowerCase().includes(S.ws.toLowerCase())).map(w=>`<div class="wt-item ${S.sw.has(w.id)?'checked':''}" onclick="tgW('${w.id}')"><input type="checkbox" ${S.sw.has(w.id)?'checked':''}><div><div class="wt-nm">${w.c}</div><div class="wt-tnpa">${w.t} → ${w.k}</div>${w.s?`<div class="wt-sub">${w.s.split(';').slice(0,3).join('; ')}${w.s.split(';').length>3?' ...':''}</div>`:''}</div></div>`).join('')}</div><div class="wt-count">Выбрано: ${S.sw.size} из ${W.length}</div></div>`:'';
 const bxH=S.bxR.length>0?`<div style="margin-top:8px;border:1px solid #e2e8f0;border-radius:7px;max-height:150px;overflow-y:auto">${S.bxR.map(u=>`<div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:13px;display:flex;justify-content:space-between" onclick="S.responsible.name='${E(u.name)}';S.responsible.phone='${E(u.phone)}';S.bxR=[];render()"><span>${u.name}</span><span style="color:#64748b">${u.phone}</span></div>`).join('')}</div>`:'';
 el.innerHTML=`${iH}${cH}${sH}<div class="card"><div class="card-title">👤 Ответственный исполнитель</div><div class="card-sub">Найдите в Битрикс24 или введите вручную</div><div class="bx-row"><input type="text" value="${E(S.bxS)}" placeholder="Имя сотрудника..." oninput="S.bxS=this.value"><button class="btn-bx" onclick="doBx()" ${S.bxL?'disabled':''}>${S.bxL?'⏳':'🔍 Найти'}</button></div>${bxH}<div class="fg" style="margin-top:10px">${f('responsible','name','ФИО ответственного')}${f('responsible','phone','Телефон ответственного')}</div></div><div class="actions"><button class="btn btn-s" onclick="S.step=2;render()">← Назад</button><button class="btn btn-p" onclick="S.step=4;render()">Далее →</button></div>`}
 
