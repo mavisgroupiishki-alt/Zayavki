@@ -66,6 +66,35 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+// PDF.js worker
+if(window.pdfjsLib){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'}
+// OpenCV.js - load on demand when Сканы tab opened
+window.cvReady=false;
+function loadOpenCV(){
+  if(window.cv && window.cv.Mat)return Promise.resolve(window.cv);
+  if(window._cvLoading)return window._cvLoading;
+  window._cvLoading=new Promise((resolve,reject)=>{
+    const s=document.createElement('script');
+    s.src='https://docs.opencv.org/4.8.0/opencv.js';
+    s.async=true;
+    s.onload=()=>{
+      const check=()=>{
+        if(window.cv && window.cv.Mat){window.cvReady=true;resolve(window.cv)}
+        else if(window.cv && window.cv.onRuntimeInitialized!==undefined){
+          window.cv.onRuntimeInitialized=()=>{window.cvReady=true;resolve(window.cv)};
+        } else setTimeout(check,100);
+      };
+      check();
+    };
+    s.onerror=reject;
+    document.head.appendChild(s);
+  });
+  return window._cvLoading;
+}
+</script>
 <script>
 const BX='https://mavisgroup.bitrix24.by/rest/2110/u2p31bhlm7llvvfn/';
 const TYPES=[{id:'bsc',label:'БСЦ (ИСО СУОТ)',icon:'📋',color:'#2563eb',desc:'БелСтандартЦентр СМ'},{id:'beltechexpert',label:'БелТехЭкспертиза',icon:'🔧',color:'#ea580c',desc:'ООО «БелТехЭкспертиза»'},{id:'cert_metal',label:'Серт. продукции',icon:'⚙️',color:'#dc2626',desc:'«БелСертификат»'},{id:'stroycomplex',label:'Стройкомплекс СПК',icon:'🏗️',color:'#059669',desc:'ОАО «СТРОЙКОМПЛЕКС»'},{id:'bisp',label:'БИСП СПК',icon:'🏢',color:'#7c3aed',desc:'РУП «БИСП»'}];
@@ -297,183 +326,637 @@ function switchModule(mod){
   document.getElementById('tabZayavki').classList.toggle('active',mod==='zayavki');
   document.getElementById('tabScan').classList.toggle('active',mod==='scan');
   document.getElementById('tabDiplom').classList.toggle('active',mod==='diplom');
-  if(mod==='scan')renderScan();
+  if(mod==='scan')renderDoc();
   if(mod==='diplom')renderDiplom();
 }
 
-// ===================== SCAN ENHANCER =====================
-let scanState={img:null,fileName:'',brightness:0,contrast:30,sharpness:30,whiten:20};
+// ===================== DOC ENHANCER v2 =====================
+let docState={
+  files:[],        // [{name, pages:[{originalCanvas, processedCanvas, rotation:0}]}]
+  currentFile:0,
+  currentPage:0,
+  docType:'dipl',  // 'dipl' | 'tk'
+  processing:false,
+  cvStatus:'idle', // idle | loading | ready | error
+  lastError:''
+};
 
-function renderScan(){
+function renderDoc(){
   const el=document.getElementById('scanApp');
-  if(!scanState.img){
+  const D=docState;
+  // Auto-start opencv load
+  if(D.cvStatus==='idle'){
+    D.cvStatus='loading';
+    loadOpenCV().then(()=>{D.cvStatus='ready';renderDoc()}).catch(e=>{D.cvStatus='error';D.lastError=e.message||'не удалось';renderDoc()});
+  }
+  if(D.files.length===0){
     el.innerHTML=`
     <div class="card">
-      <div class="card-title">🔍 Улучшатель сканов</div>
-      <div class="card-sub">Загрузите скан документа (диплом, трудовая, паспорт и т.д.) для улучшения качества</div>
-      <div class="scan-zone" id="scanDz" onclick="document.getElementById('scanFi').click()">
-        <input type="file" id="scanFi" accept="image/*,.pdf" hidden>
-        <div class="upload-icon">📷</div>
-        <div class="upload-title">Загрузите скан</div>
-        <div class="upload-sub">JPG, PNG или перетащите файл</div>
+      <div class="card-title">🔍 Улучшатель документов</div>
+      <div class="card-sub">Обработка сканов и фото дипломов и трудовых книжек: выравнивание, обрезка, удаление фона, повышение читаемости.</div>
+      ${D.cvStatus==='loading'?'<div style="margin-top:10px;padding:8px 12px;background:#eef2ff;border-radius:6px;font-size:13px;color:#4338ca">⏳ Загружается движок обработки (~8 МБ, только при первом запуске)...</div>':''}
+      ${D.cvStatus==='error'?`<div style="margin-top:10px;padding:8px 12px;background:#fef2f2;border-radius:6px;font-size:13px;color:#991b1b">⚠️ Ошибка загрузки движка: ${E(D.lastError)}. Проверьте интернет и перезагрузите страницу.</div>`:''}
+      ${D.cvStatus==='ready'?'<div style="margin-top:10px;padding:8px 12px;background:#f0fdf4;border-radius:6px;font-size:13px;color:#166534">✓ Движок обработки готов</div>':''}
+    </div>
+    <div class="card">
+      <div class="card-title">1. Выберите тип документа</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button onclick="docSetType('dipl')" style="flex:1;min-width:180px;padding:14px;border:2px solid ${D.docType==='dipl'?'#1a1a2e':'#d1d5db'};border-radius:10px;background:${D.docType==='dipl'?'#1a1a2e':'#fff'};color:${D.docType==='dipl'?'#fff':'#333'};font-size:14px;font-weight:600;cursor:pointer;font-family:inherit">🎓 Диплом / Аттестат</button>
+        <button onclick="docSetType('tk')" style="flex:1;min-width:180px;padding:14px;border:2px solid ${D.docType==='tk'?'#1a1a2e':'#d1d5db'};border-radius:10px;background:${D.docType==='tk'?'#1a1a2e':'#fff'};color:${D.docType==='tk'?'#fff':'#333'};font-size:14px;font-weight:600;cursor:pointer;font-family:inherit">📘 Трудовая книжка / Паспорт</button>
       </div>
-    </div>`;
-    const z=document.getElementById('scanDz'),fi=document.getElementById('scanFi');
-    z.ondragover=e=>{e.preventDefault();z.classList.add('drag')};
-    z.ondragleave=()=>z.classList.remove('drag');
-    z.ondrop=e=>{e.preventDefault();z.classList.remove('drag');loadScanFile(e.dataTransfer.files[0])};
-    fi.onchange=()=>loadScanFile(fi.files[0]);
+    </div>
+    <div class="card">
+      <div class="card-title">2. Загрузите файл(ы)</div>
+      <div style="border:2px dashed #d1d5db;border-radius:12px;padding:28px;text-align:center;cursor:pointer;background:#fafafa" onclick="document.getElementById('docFi').click()">
+        <input type="file" id="docFi" accept="image/*,.pdf" multiple hidden onchange="docLoadFiles(this.files)">
+        <div style="font-size:44px;margin-bottom:8px">📷</div>
+        <div style="font-weight:600;font-size:15px;color:#333">Загрузите скан или фото</div>
+        <div style="color:#666;font-size:13px;margin-top:6px">PDF, JPG, PNG, HEIC · можно несколько файлов<br>Каждая страница PDF обрабатывается отдельно</div>
+      </div>
+    </div>
+    `;
     return;
   }
-  
+  // Processing view
+  const file=D.files[D.currentFile];
+  const page=file?.pages[D.currentPage];
   el.innerHTML=`
   <div class="card">
-    <div class="card-title">🔍 Улучшатель сканов</div>
-    <div class="scan-actions">
-      <button class="btn btn-p" onclick="autoEnhance()">⚡ Авто-улучшение</button>
-      <button class="btn btn-s" onclick="resetSliders()">↩️ Сброс</button>
-      <button class="btn btn-gen" onclick="downloadScan()">📥 Скачать результат</button>
-      <button class="btn btn-s" onclick="scanState.img=null;renderScan()">🗑️ Другой файл</button>
-    </div>
-  </div>
-  <div class="card">
-    <div class="card-title">⚙️ Настройки</div>
-    <div class="slider-row">
-      <label>Яркость</label>
-      <input type="range" min="-100" max="100" value="${scanState.brightness}" oninput="scanState.brightness=+this.value;this.nextElementSibling.textContent=this.value;applyScan()">
-      <span class="val">${scanState.brightness}</span>
-    </div>
-    <div class="slider-row">
-      <label>Контраст</label>
-      <input type="range" min="-100" max="100" value="${scanState.contrast}" oninput="scanState.contrast=+this.value;this.nextElementSibling.textContent=this.value;applyScan()">
-      <span class="val">${scanState.contrast}</span>
-    </div>
-    <div class="slider-row">
-      <label>Резкость</label>
-      <input type="range" min="0" max="100" value="${scanState.sharpness}" oninput="scanState.sharpness=+this.value;this.nextElementSibling.textContent=this.value;applyScan()">
-      <span class="val">${scanState.sharpness}</span>
-    </div>
-    <div class="slider-row">
-      <label>Выбеливание фона</label>
-      <input type="range" min="0" max="100" value="${scanState.whiten}" oninput="scanState.whiten=+this.value;this.nextElementSibling.textContent=this.value;applyScan()">
-      <span class="val">${scanState.whiten}</span>
-    </div>
-  </div>
-  <div class="card">
-    <div class="scan-preview">
-      <div class="scan-img-wrap">
-        <div class="scan-label">Оригинал</div>
-        <img id="scanOrig" src="${scanState.img}">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-weight:600;font-size:14px">${E(file.name)}${file.pages.length>1?` — стр. ${D.currentPage+1}/${file.pages.length}`:''}</div>
+        <div style="font-size:12px;color:#666">${D.docType==='dipl'?'🎓 Диплом':'📘 Трудовая'} · ${D.files.length} файл(ов)</div>
       </div>
-      <div class="scan-img-wrap">
-        <div class="scan-label">Результат</div>
-        <canvas id="scanCanvas"></canvas>
+      <div style="display:flex;gap:6px">
+        <button onclick="docReset()" style="padding:8px 12px;background:#e5e7eb;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit">← Новая партия</button>
       </div>
     </div>
-  </div>`;
-  
-  setTimeout(()=>applyScan(),100);
+    ${D.files.length>1?`
+    <div style="display:flex;gap:4px;margin-top:10px;flex-wrap:wrap">
+      ${D.files.map((f,i)=>`<button onclick="docSwitchFile(${i})" style="padding:4px 10px;font-size:12px;border-radius:5px;border:1px solid ${i===D.currentFile?'#1a1a2e':'#d1d5db'};background:${i===D.currentFile?'#1a1a2e':'#fff'};color:${i===D.currentFile?'#fff':'#555'};cursor:pointer;font-family:inherit">${i+1}</button>`).join('')}
+    </div>
+    `:''}
+    ${file.pages.length>1?`
+    <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
+      ${file.pages.map((p,i)=>`<button onclick="docSwitchPage(${i})" style="padding:3px 8px;font-size:11px;border-radius:4px;border:1px solid ${i===D.currentPage?'#3b82f6':'#e5e7eb'};background:${i===D.currentPage?'#dbeafe':'#fff'};color:#555;cursor:pointer;font-family:inherit">стр. ${i+1}</button>`).join('')}
+    </div>
+    `:''}
+  </div>
+
+  ${D.processing?'<div class="card"><div style="text-align:center;padding:20px"><div style="font-size:14px;color:#333;margin-bottom:8px">⏳ Обрабатываю документ...</div><div style="font-size:12px;color:#888">Обычно занимает 5–15 секунд</div></div></div>':''}
+
+  ${!D.processing && page && !page.processedCanvas?`
+  <div class="card">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button onclick="docProcessCurrent()" style="padding:12px 24px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;flex:1;min-width:160px" ${D.cvStatus!=='ready'?'disabled':''}>${D.cvStatus==='ready'?'⚡ Обработать':'⏳ Движок грузится...'}</button>
+      <button onclick="docProcessAll()" style="padding:12px 18px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit" ${D.cvStatus!=='ready'?'disabled':''}>Обработать все (${docCountUnprocessed()})</button>
+    </div>
+  </div>`:''}
+
+  ${page && page.processedCanvas?`
+  <div class="card">
+    <div class="card-title">Результат</div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <button onclick="docRotate(-90)" style="padding:8px 12px;background:#fff;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit">↺ 90°</button>
+      <button onclick="docRotate(90)" style="padding:8px 12px;background:#fff;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit">↻ 90°</button>
+      <button onclick="docRotate(180)" style="padding:8px 12px;background:#fff;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit">⟳ 180°</button>
+      <button onclick="docProcessCurrent()" style="padding:8px 12px;background:#fff;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit">🔄 Переобработать</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <div style="font-size:12px;color:#888;margin-bottom:4px;text-align:center">Оригинал</div>
+        <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;background:#f9fafb"><img id="docOrigImg" style="width:100%;display:block"></div>
+      </div>
+      <div>
+        <div style="font-size:12px;color:#888;margin-bottom:4px;text-align:center">Обработанное</div>
+        <div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;background:#fff"><img id="docProcImg" style="width:100%;display:block"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Скачать</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="docDownloadCurrent()" style="padding:10px 16px;background:#059669;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;font-family:inherit">📥 Текущая страница (PNG)</button>
+      <button onclick="docDownloadPDF('color')" style="padding:10px 16px;background:#059669;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;font-family:inherit">📄 Все страницы (PDF)</button>
+      <button onclick="docDownloadPDF('bw')" style="padding:10px 16px;background:#1a1a2e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;font-family:inherit">📋 Версия для органа (Ч/Б PDF)</button>
+    </div>
+    <div style="font-size:12px;color:#888;margin-top:8px">Версия «для органа» — монохромный PDF, оптимизированный для печати и подачи в государственные органы.</div>
+  </div>`:''}
+  `;
+  // Render thumbnails
+  if(page && page.processedCanvas){
+    const orig=document.getElementById('docOrigImg');
+    const proc=document.getElementById('docProcImg');
+    if(orig)orig.src=page.originalCanvas.toDataURL('image/jpeg',0.7);
+    if(proc)proc.src=page.processedCanvas.toDataURL('image/jpeg',0.8);
+  }
 }
 
-function loadScanFile(file){
-  if(!file)return;
-  scanState.fileName=file.name.replace(/\.[^.]+$/,'')+'_enhanced';
-  const reader=new FileReader();
-  reader.onload=e=>{
-    scanState.img=e.target.result;
-    scanState.brightness=0;scanState.contrast=30;scanState.sharpness=30;scanState.whiten=20;
-    renderScan();
-  };
-  reader.readAsDataURL(file);
+function docSetType(t){docState.docType=t;renderDoc()}
+function docReset(){docState.files=[];docState.currentFile=0;docState.currentPage=0;renderDoc()}
+function docSwitchFile(i){docState.currentFile=i;docState.currentPage=0;renderDoc()}
+function docSwitchPage(i){docState.currentPage=i;renderDoc()}
+function docCountUnprocessed(){let n=0;for(const f of docState.files)for(const p of f.pages)if(!p.processedCanvas)n++;return n}
+
+async function docLoadFiles(fileList){
+  if(!fileList||fileList.length===0)return;
+  for(const f of fileList){
+    try{
+      const pages=[];
+      if(f.type==='application/pdf' || f.name.toLowerCase().endsWith('.pdf')){
+        const ab=await f.arrayBuffer();
+        const pdf=await pdfjsLib.getDocument({data:ab}).promise;
+        for(let i=1;i<=pdf.numPages;i++){
+          const page=await pdf.getPage(i);
+          const viewport=page.getViewport({scale:2.0}); // 2x for quality
+          const c=document.createElement('canvas');
+          c.width=viewport.width;
+          c.height=viewport.height;
+          await page.render({canvasContext:c.getContext('2d'),viewport}).promise;
+          pages.push({originalCanvas:c,processedCanvas:null,rotation:0});
+        }
+      } else {
+        // image
+        const url=URL.createObjectURL(f);
+        const img=new Image();
+        await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url});
+        const c=document.createElement('canvas');
+        // Limit size for perf (max 2400px longest side)
+        const maxSide=2400;
+        let w=img.width,h=img.height;
+        if(Math.max(w,h)>maxSide){
+          const k=maxSide/Math.max(w,h);
+          w=Math.round(w*k);h=Math.round(h*k);
+        }
+        c.width=w;c.height=h;
+        c.getContext('2d').drawImage(img,0,0,w,h);
+        URL.revokeObjectURL(url);
+        pages.push({originalCanvas:c,processedCanvas:null,rotation:0});
+      }
+      docState.files.push({name:f.name,pages});
+    }catch(e){
+      alert('Ошибка загрузки '+f.name+': '+e.message);
+    }
+  }
+  renderDoc();
 }
 
-function autoEnhance(){
-  scanState.brightness=10;scanState.contrast=40;scanState.sharpness=40;scanState.whiten=35;
-  renderScan();
+async function docProcessCurrent(){
+  const D=docState;
+  if(D.cvStatus!=='ready'){alert('Движок обработки ещё не загружен');return}
+  const page=D.files[D.currentFile]?.pages[D.currentPage];
+  if(!page)return;
+  D.processing=true;renderDoc();
+  try{
+    await new Promise(r=>setTimeout(r,30)); // let UI update
+    page.processedCanvas=await docEnhance(page.originalCanvas,D.docType);
+    page.rotation=0;
+  }catch(e){
+    console.error(e);
+    alert('Ошибка обработки: '+e.message);
+  }
+  D.processing=false;renderDoc();
 }
 
-function resetSliders(){
-  scanState.brightness=0;scanState.contrast=0;scanState.sharpness=0;scanState.whiten=0;
-  renderScan();
-}
-
-function applyScan(){
-  const canvas=document.getElementById('scanCanvas');
-  const origImg=document.getElementById('scanOrig');
-  if(!canvas||!origImg||!origImg.complete)return;
-  
-  const img=new Image();
-  img.onload=()=>{
-    canvas.width=img.width;canvas.height=img.height;
-    const ctx=canvas.getContext('2d');
-    ctx.drawImage(img,0,0);
-    
-    const imageData=ctx.getImageData(0,0,canvas.width,canvas.height);
-    const data=imageData.data;
-    
-    const br=scanState.brightness/100*255;
-    const ct=scanState.contrast/100;
-    const factor=(259*(ct*255+255))/(255*(259-ct*255));
-    const wh=scanState.whiten/100;
-    
-    for(let i=0;i<data.length;i+=4){
-      let r=data[i],g=data[i+1],bl=data[i+2];
-      
-      // Brightness
-      r+=br;g+=br;bl+=br;
-      
-      // Contrast
-      r=factor*(r-128)+128;
-      g=factor*(g-128)+128;
-      bl=factor*(bl-128)+128;
-      
-      // Whiten background (push light grays to white)
-      if(wh>0){
-        const avg=(r+g+bl)/3;
-        if(avg>140){
-          const push=wh*(avg-140)/115;
-          r=r+(255-r)*push;
-          g=g+(255-g)*push;
-          bl=bl+(255-bl)*push;
+async function docProcessAll(){
+  const D=docState;
+  if(D.cvStatus!=='ready'){alert('Движок обработки ещё не загружен');return}
+  D.processing=true;renderDoc();
+  try{
+    for(let fi=0;fi<D.files.length;fi++){
+      for(let pi=0;pi<D.files[fi].pages.length;pi++){
+        const page=D.files[fi].pages[pi];
+        if(!page.processedCanvas){
+          D.currentFile=fi;D.currentPage=pi;
+          page.processedCanvas=await docEnhance(page.originalCanvas,D.docType);
+          page.rotation=0;
         }
       }
-      
-      data[i]=Math.max(0,Math.min(255,r));
-      data[i+1]=Math.max(0,Math.min(255,g));
-      data[i+2]=Math.max(0,Math.min(255,bl));
     }
-    
-    ctx.putImageData(imageData,0,0);
-    
-    // Sharpness (unsharp mask approximation)
-    if(scanState.sharpness>0){
-      const sh=scanState.sharpness/100;
-      const tmpCanvas=document.createElement('canvas');
-      tmpCanvas.width=canvas.width;tmpCanvas.height=canvas.height;
-      const tmpCtx=tmpCanvas.getContext('2d');
-      tmpCtx.filter=`blur(1px)`;
-      tmpCtx.drawImage(canvas,0,0);
-      const blurred=tmpCtx.getImageData(0,0,canvas.width,canvas.height);
-      const sharp=ctx.getImageData(0,0,canvas.width,canvas.height);
-      const sd=sharp.data;const bd=blurred.data;
-      for(let i=0;i<sd.length;i+=4){
-        sd[i]=Math.max(0,Math.min(255,sd[i]+sh*2*(sd[i]-bd[i])));
-        sd[i+1]=Math.max(0,Math.min(255,sd[i+1]+sh*2*(sd[i+1]-bd[i+1])));
-        sd[i+2]=Math.max(0,Math.min(255,sd[i+2]+sh*2*(sd[i+2]-bd[i+2])));
-      }
-      ctx.putImageData(sharp,0,0);
-    }
-  };
-  img.src=scanState.img;
+  }catch(e){
+    console.error(e);
+    alert('Ошибка: '+e.message);
+  }
+  D.processing=false;renderDoc();
 }
 
-function downloadScan(){
-  const canvas=document.getElementById('scanCanvas');
-  if(!canvas)return;
-  canvas.toBlob(blob=>{
-    saveAs(blob,(scanState.fileName||'scan_enhanced')+'.png');
-  },'image/png');
+function docRotate(deg){
+  const page=docState.files[docState.currentFile]?.pages[docState.currentPage];
+  if(!page||!page.processedCanvas)return;
+  const src=page.processedCanvas;
+  const c=document.createElement('canvas');
+  const ctx=c.getContext('2d');
+  if(deg===90){
+    c.width=src.height;c.height=src.width;
+    ctx.translate(c.width,0);ctx.rotate(Math.PI/2);
+    ctx.drawImage(src,0,0);
+  } else if(deg===-90){
+    c.width=src.height;c.height=src.width;
+    ctx.translate(0,c.height);ctx.rotate(-Math.PI/2);
+    ctx.drawImage(src,0,0);
+  } else if(deg===180){
+    c.width=src.width;c.height=src.height;
+    ctx.translate(c.width,c.height);ctx.rotate(Math.PI);
+    ctx.drawImage(src,0,0);
+  }
+  page.processedCanvas=c;
+  renderDoc();
 }
+
+function docDownloadCurrent(){
+  const page=docState.files[docState.currentFile]?.pages[docState.currentPage];
+  if(!page||!page.processedCanvas)return;
+  const file=docState.files[docState.currentFile];
+  const name=file.name.replace(/\.(pdf|jpe?g|png|heic)$/i,'');
+  const suffix=file.pages.length>1?`_p${docState.currentPage+1}`:'';
+  page.processedCanvas.toBlob(b=>saveAs(b,`${name}${suffix}_enhanced.png`),'image/png');
+}
+
+async function docDownloadPDF(mode){
+  // mode: 'color' | 'bw'
+  const D=docState;
+  // Collect all processed pages from all files
+  const pages=[];
+  for(const f of D.files)for(const p of f.pages)if(p.processedCanvas)pages.push({file:f,page:p});
+  if(pages.length===0){alert('Нет обработанных страниц');return}
+  const {jsPDF}=window.jspdf;
+  let pdf=null;
+  for(let i=0;i<pages.length;i++){
+    const src=pages[i].page.processedCanvas;
+    // Choose canvas depending on mode
+    let canvas=src;
+    if(mode==='bw'){
+      canvas=docToBW(src);
+    }
+    // Orient page (portrait/landscape)
+    const isLandscape=canvas.width>canvas.height;
+    const w=isLandscape?297:210;
+    const h=isLandscape?210:297;
+    if(!pdf){
+      pdf=new jsPDF({unit:'mm',format:'a4',orientation:isLandscape?'l':'p'});
+    } else {
+      pdf.addPage('a4',isLandscape?'l':'p');
+    }
+    // Fit image to page with margin
+    const margin=5;
+    const pw=w-2*margin,ph=h-2*margin;
+    const ar=canvas.width/canvas.height;
+    let iw=pw,ih=pw/ar;
+    if(ih>ph){ih=ph;iw=ph*ar}
+    const x=(w-iw)/2,y=(h-ih)/2;
+    const imgData=canvas.toDataURL('image/jpeg',mode==='bw'?0.75:0.85);
+    pdf.addImage(imgData,'JPEG',x,y,iw,ih);
+  }
+  const baseName=D.files[0].name.replace(/\.(pdf|jpe?g|png|heic)$/i,'');
+  const suffix=mode==='bw'?'_для_органа':'_обработано';
+  pdf.save(`${baseName}${suffix}.pdf`);
+}
+
+function docToBW(srcCanvas){
+  // Convert already-enhanced canvas to strict B/W (binarized)
+  const c=document.createElement('canvas');
+  c.width=srcCanvas.width;c.height=srcCanvas.height;
+  const ctx=c.getContext('2d');
+  ctx.drawImage(srcCanvas,0,0);
+  const img=ctx.getImageData(0,0,c.width,c.height);
+  const d=img.data;
+  for(let i=0;i<d.length;i+=4){
+    // Luminance
+    const lum=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+    // Soft threshold: keep mid-tones slightly
+    const v=lum<180?0:(lum<220?Math.round((lum-180)*255/40):255);
+    d[i]=d[i+1]=d[i+2]=v;
+  }
+  ctx.putImageData(img,0,0);
+  return c;
+}
+
+// ============ THE CORE ENHANCE PIPELINE ============
+async function docEnhance(srcCanvas,docType){
+  const cv=window.cv;
+  if(!cv)throw new Error('OpenCV not ready');
+  // Read Mat from canvas
+  let src=cv.imread(srcCanvas);
+  try{
+    // Step 1: Document contour detection (multi-strategy)
+    const pts=docDetectContour(cv,src);
+    let warped;
+    if(pts){
+      warped=docFourPointTransform(cv,src,pts);
+    } else {
+      warped=src.clone();
+    }
+    // Step 2: orientation detection (0/90/180/270)
+    const oriented=docDetectOrientation(cv,warped);
+    warped.delete();
+    // Step 3: deskew fine
+    const deskewed=docDeskew(cv,oriented);
+    oriented.delete();
+    // Step 4: aggressive enhancement
+    const enhanced=docEnhanceAggressive(cv,deskewed);
+    deskewed.delete();
+    // Output canvas
+    const out=document.createElement('canvas');
+    cv.imshow(out,enhanced);
+    enhanced.delete();
+    return out;
+  } finally {
+    src.delete();
+  }
+}
+
+function docDetectContour(cv,src){
+  const h=src.rows,w=src.cols;
+  const scale=1000/Math.max(h,w);
+  const small=new cv.Mat();
+  cv.resize(src,small,new cv.Size(Math.round(w*scale),Math.round(h*scale)));
+  const gray=new cv.Mat();
+  cv.cvtColor(small,gray,cv.COLOR_RGBA2GRAY);
+  const sh=gray.rows,sw=gray.cols;
+  const minArea=sh*sw*0.15;
+  const maxArea=sh*sw*0.98;
+  const candidates=[];
+  
+  function tryFindQuads(binImg,tag){
+    const contours=new cv.MatVector();
+    const hierarchy=new cv.Mat();
+    cv.findContours(binImg,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+    // Get top 5 by area
+    const arr=[];
+    for(let i=0;i<contours.size();i++){
+      const c=contours.get(i);
+      const area=cv.contourArea(c);
+      arr.push({c,area,idx:i});
+    }
+    arr.sort((a,b)=>b.area-a.area);
+    for(let k=0;k<Math.min(5,arr.length);k++){
+      const cand=arr[k];
+      if(cand.area<minArea||cand.area>maxArea)continue;
+      const peri=cv.arcLength(cand.c,true);
+      for(const eps of [0.02,0.03,0.04,0.05]){
+        const approx=new cv.Mat();
+        cv.approxPolyDP(cand.c,approx,eps*peri,true);
+        if(approx.rows===4){
+          const pts=[];
+          for(let i=0;i<4;i++){
+            pts.push([approx.data32S[i*2],approx.data32S[i*2+1]]);
+          }
+          candidates.push({tag,area:cand.area,pts});
+          approx.delete();
+          break;
+        }
+        approx.delete();
+      }
+    }
+    // Clean up all contours
+    for(let i=0;i<contours.size();i++)contours.get(i).delete();
+    contours.delete();
+    hierarchy.delete();
+  }
+  
+  // Strategy A: Canny
+  for(const [lo,hi] of [[30,100],[50,150],[20,80]]){
+    const blurred=new cv.Mat();
+    cv.GaussianBlur(gray,blurred,new cv.Size(7,7),0);
+    const edges=new cv.Mat();
+    cv.Canny(blurred,edges,lo,hi);
+    const dilated=new cv.Mat();
+    const k=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(5,5));
+    cv.dilate(edges,dilated,k,new cv.Point(-1,-1),2);
+    tryFindQuads(dilated,'canny');
+    blurred.delete();edges.delete();dilated.delete();k.delete();
+  }
+  
+  // Strategy B: Otsu
+  const otsu=new cv.Mat();
+  cv.threshold(gray,otsu,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
+  const otsuInv=new cv.Mat();
+  cv.bitwise_not(otsu,otsuInv);
+  for(const m of [otsu,otsuInv]){
+    const closed=new cv.Mat();
+    const kk=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(15,15));
+    cv.morphologyEx(m,closed,cv.MORPH_CLOSE,kk);
+    tryFindQuads(closed,'otsu');
+    closed.delete();kk.delete();
+  }
+  otsu.delete();otsuInv.delete();
+  
+  // Strategy C: Saturation-based
+  const hsv=new cv.Mat();
+  const smallBGR=new cv.Mat();
+  cv.cvtColor(small,smallBGR,cv.COLOR_RGBA2BGR);
+  cv.cvtColor(smallBGR,hsv,cv.COLOR_BGR2HSV);
+  const hsvChannels=new cv.MatVector();
+  cv.split(hsv,hsvChannels);
+  const sat=hsvChannels.get(1);
+  const satBin=new cv.Mat();
+  cv.threshold(sat,satBin,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
+  const satClosed=new cv.Mat();
+  const sk=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(15,15));
+  cv.morphologyEx(satBin,satClosed,cv.MORPH_CLOSE,sk);
+  tryFindQuads(satClosed,'sat');
+  hsv.delete();smallBGR.delete();
+  for(let i=0;i<hsvChannels.size();i++)hsvChannels.get(i).delete();
+  hsvChannels.delete();
+  satBin.delete();satClosed.delete();sk.delete();
+  
+  small.delete();gray.delete();
+  
+  if(candidates.length===0)return null;
+  // Pick best: largest area with good aspect (not too thin)
+  function score(cand){
+    const pts=orderPts(cand.pts);
+    const wA=dist(pts[1],pts[0]),wB=dist(pts[2],pts[3]);
+    const hA=dist(pts[3],pts[0]),hB=dist(pts[2],pts[1]);
+    const wsym=Math.min(wA,wB)/(Math.max(wA,wB)+1);
+    const hsym=Math.min(hA,hB)/(Math.max(hA,hB)+1);
+    const aw=(wA+wB)/2,ah=(hA+hB)/2;
+    const ar=Math.min(aw,ah)/(Math.max(aw,ah)+1);
+    return cand.area*wsym*hsym*(0.3+ar);
+  }
+  candidates.sort((a,b)=>score(b)-score(a));
+  const best=candidates[0];
+  console.log(`[DocEnhance] contour via ${best.tag}, area=${Math.round(best.area)}`);
+  // Scale back to original
+  return best.pts.map(p=>[p[0]/scale,p[1]/scale]);
+}
+
+function dist(a,b){return Math.hypot(a[0]-b[0],a[1]-b[1])}
+function orderPts(pts){
+  // top-left (min sum), top-right (min diff), bottom-right (max sum), bottom-left (max diff)
+  const sums=pts.map(p=>p[0]+p[1]);
+  const diffs=pts.map(p=>p[1]-p[0]);
+  const tl=pts[sums.indexOf(Math.min(...sums))];
+  const br=pts[sums.indexOf(Math.max(...sums))];
+  const tr=pts[diffs.indexOf(Math.min(...diffs))];
+  const bl=pts[diffs.indexOf(Math.max(...diffs))];
+  return [tl,tr,br,bl];
+}
+
+function docFourPointTransform(cv,src,pts){
+  const [tl,tr,br,bl]=orderPts(pts);
+  const wA=dist(br,bl),wB=dist(tr,tl);
+  const maxW=Math.round(Math.max(wA,wB));
+  const hA=dist(tr,br),hB=dist(tl,bl);
+  const maxH=Math.round(Math.max(hA,hB));
+  const srcTri=cv.matFromArray(4,1,cv.CV_32FC2,[tl[0],tl[1],tr[0],tr[1],br[0],br[1],bl[0],bl[1]]);
+  const dstTri=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,maxW-1,0,maxW-1,maxH-1,0,maxH-1]);
+  const M=cv.getPerspectiveTransform(srcTri,dstTri);
+  const warped=new cv.Mat();
+  cv.warpPerspective(src,warped,M,new cv.Size(maxW,maxH),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(255,255,255,255));
+  srcTri.delete();dstTri.delete();M.delete();
+  return warped;
+}
+
+function docDetectOrientation(cv,img){
+  // Try 4 orientations, score each by:
+  //   line_score = row_std / col_std  (clear horizontal text lines)
+  //   header_score = peak in top third / peaks elsewhere
+  const gray=new cv.Mat();
+  cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
+  const h=gray.rows,w=gray.cols;
+  const scale=800/Math.max(h,w);
+  const small=new cv.Mat();
+  cv.resize(gray,small,new cv.Size(Math.round(w*scale),Math.round(h*scale)));
+  gray.delete();
+  
+  function scoreRotation(rotCode){
+    const rot=new cv.Mat();
+    if(rotCode===0)small.copyTo(rot);
+    else if(rotCode===1)cv.rotate(small,rot,cv.ROTATE_90_CLOCKWISE);
+    else if(rotCode===2)cv.rotate(small,rot,cv.ROTATE_180);
+    else cv.rotate(small,rot,cv.ROTATE_90_COUNTERCLOCKWISE);
+    const bin=new cv.Mat();
+    cv.threshold(rot,bin,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
+    // row_sums
+    const rh=bin.rows,rw=bin.cols;
+    const rowSums=new Float64Array(rh);
+    const colSums=new Float64Array(rw);
+    for(let y=0;y<rh;y++){
+      let s=0;
+      for(let x=0;x<rw;x++){
+        const v=bin.data[y*rw+x]>0?1:0;
+        s+=v;colSums[x]+=v;
+      }
+      rowSums[y]=s;
+    }
+    function std(arr){
+      let m=0;for(const v of arr)m+=v;m/=arr.length;
+      let s=0;for(const v of arr)s+=(v-m)*(v-m);
+      return Math.sqrt(s/arr.length);
+    }
+    const rowStd=std(rowSums),colStd=std(colSums);
+    const line=rowStd/(colStd+1);
+    // smoothed max in thirds
+    const smoothed=new Float64Array(rh);
+    for(let i=0;i<rh;i++){
+      let s=0,n=0;
+      for(let k=-2;k<=2;k++){const j=i+k;if(j>=0&&j<rh){s+=rowSums[j];n++}}
+      smoothed[i]=s/n;
+    }
+    const t1=Math.floor(rh/3),t2=Math.floor(2*rh/3);
+    let topMax=0,midMax=0,botMax=0;
+    for(let i=0;i<t1;i++)if(smoothed[i]>topMax)topMax=smoothed[i];
+    for(let i=t1;i<t2;i++)if(smoothed[i]>midMax)midMax=smoothed[i];
+    for(let i=t2;i<rh;i++)if(smoothed[i]>botMax)botMax=smoothed[i];
+    const headerScore=topMax/(midMax+botMax+1);
+    const total=line*(1+headerScore);
+    rot.delete();bin.delete();
+    return total;
+  }
+  let bestRot=0,bestScore=-1;
+  for(let r=0;r<4;r++){
+    const s=scoreRotation(r);
+    if(s>bestScore){bestScore=s;bestRot=r}
+  }
+  small.delete();
+  const out=new cv.Mat();
+  if(bestRot===0)img.copyTo(out);
+  else if(bestRot===1)cv.rotate(img,out,cv.ROTATE_90_CLOCKWISE);
+  else if(bestRot===2)cv.rotate(img,out,cv.ROTATE_180);
+  else cv.rotate(img,out,cv.ROTATE_90_COUNTERCLOCKWISE);
+  return out;
+}
+
+function docDeskew(cv,img){
+  // Fine rotation by Hough lines
+  const gray=new cv.Mat();
+  cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
+  const edges=new cv.Mat();
+  cv.Canny(gray,edges,50,150);
+  const lines=new cv.Mat();
+  cv.HoughLines(edges,lines,1,Math.PI/360,200);
+  const angles=[];
+  const N=Math.min(lines.rows,100);
+  for(let i=0;i<N;i++){
+    const theta=lines.data32F[i*2+1];
+    const angle=(theta*180/Math.PI)-90;
+    if(Math.abs(angle)<15)angles.push(angle);
+  }
+  gray.delete();edges.delete();lines.delete();
+  if(angles.length<5)return img.clone();
+  angles.sort((a,b)=>a-b);
+  const median=angles[Math.floor(angles.length/2)];
+  if(Math.abs(median)<0.3)return img.clone();
+  const h=img.rows,w=img.cols;
+  const center=new cv.Point(w/2,h/2);
+  const M=cv.getRotationMatrix2D(center,median,1.0);
+  const out=new cv.Mat();
+  cv.warpAffine(img,out,M,new cv.Size(w,h),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(255,255,255,255));
+  M.delete();
+  return out;
+}
+
+function docEnhanceAggressive(cv,img){
+  // 1) to gray
+  const gray=new cv.Mat();
+  cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
+  // 2) illumination normalization: divide by blurred background
+  const kSize=(Math.max(gray.rows,gray.cols)/25)|0;
+  const k=kSize%2===0?kSize+1:kSize;
+  const bg=new cv.Mat();
+  cv.GaussianBlur(gray,bg,new cv.Size(k,k),0);
+  // divide: normalized = gray / bg * 255
+  const norm=new cv.Mat();
+  cv.divide(gray,bg,norm,255);
+  gray.delete();bg.delete();
+  // 3) CLAHE
+  const clahe=new cv.CLAHE(3.0,new cv.Size(16,16));
+  const cl=new cv.Mat();
+  clahe.apply(norm,cl);
+  norm.delete();clahe.delete();
+  // 4) gamma 1.2
+  const lut=new cv.Mat(1,256,cv.CV_8UC1);
+  for(let i=0;i<256;i++)lut.data[i]=Math.round(Math.pow(i/255,1/1.2)*255);
+  const gamma=new cv.Mat();
+  cv.LUT(cl,lut,gamma);
+  cl.delete();lut.delete();
+  // 5) unsharp mask
+  const blur=new cv.Mat();
+  cv.GaussianBlur(gamma,blur,new cv.Size(0,0),2.0);
+  const sharp=new cv.Mat();
+  cv.addWeighted(gamma,1.8,blur,-0.8,0,sharp);
+  gamma.delete();blur.delete();
+  // 6) white point adjustment: pixels >230 -> 255
+  const w=sharp.cols,h=sharp.rows;
+  for(let i=0;i<w*h;i++){
+    if(sharp.data[i]>230)sharp.data[i]=255;
+  }
+  // Convert back to RGBA for canvas
+  const out=new cv.Mat();
+  cv.cvtColor(sharp,out,cv.COLOR_GRAY2RGBA);
+  sharp.delete();
+  return out;
+}
+
+// Hook into switchModule
+const _origSwitchModule=window.switchModule;
+window.switchModule=function(mod){
+  _origSwitchModule(mod);
+  if(mod==='scan')renderDoc();
+};
+
 
 // ===================== DIPLOM ANALYZER (Постановление №70) =====================
 const DIPLOM_DATA={"codes":{"53":"автоматизация","37 02 04":"автоматика, телемеханика и связь на железнодорожном транспорте","69":"архитектура","56 02 01":"геодезия","51":"горнодобывающая промышленность","37 01 05":"городской электрический транспорт","56 01":"землеустройство","45 01":"информационные технологии и системы связи","50":"легкая промышленность","46":"лесная промышленность","75 01 01":"лесное хозяйство","74 05 01":"мелиорация и водное хозяйство","42":"металлургия","36":"оборудование","44 01 02":"организация дорожного движения","44 01 03":"организация перевозок и управление на железнодорожном транспорте","57 01":"охрана окружающей среды","49":"пищевая промышленность","08 01 01-05":"профессиональное обучение (строительство)","08 01 01-03":"профессиональное обучение (энергетика)","75 02 01":"садово-парковое строительство","74 04 01":"сельское строительство и обустройство территорий","70":"строительство","37 02 05":"строительство железных дорог, путь и путевое хозяйство","74 06 02":"техническое обеспечение процессов хранения и переработки сельскохозяйственной продукции","38 02 03":"техническое обеспечение безопасности","91 01 01":"технология продукции и организация общественного питания","48":"химическая промышленность","43":"энергетика","74 06 05":"энергетическое обеспечение сельского хозяйства (по направлениям)","95 02 10":"авиационные радиоэлектронные системы (по направлениям)","31 04 04":"аэрокосмические радиоэлектронные и информационные системы и технологии","43 01 78":"диагностика и техническое обслуживание энергооборудования организаций","98 01 02":"защита информации в телекоммуникациях","94 02 72":"инжиниринг безопасности объектов строительства","55":"интеллектуальные системы","40":"вычислительная техника","53 01 07":"информационные технологи и управление в технических системах","41":"компоненты оборудования","98 01 01":"компьютерная безопасность","98 01 71":"математическое обеспечение компьютерной безопасности","54 01 02":"методы и приборы контроля качества и диагностики состояния объектов","94 02 02":"пожарная и промышленная безопасность","94 01 01; 94 01 71":"предупреждение и ликвидация чрезвычайных ситуаций","38":"приборы","31 03 07; 31 03 74":"прикладная информатика","36 04 01":"программно-управляемые электронно-оптические системы","98 01 03":"программное обеспечение информационной безопасности мобильных систем","94 02 71":"промышленная безопасность","36 04 02":"промышленная электроника","08 01 01-02":"профессиональное обучение (радиоэлектроника)","31 04 02":"радиофизика","39":"радиоэлектронная техника","43 01 09":"релейная защита","95 02 04":"телекоммуникационные системы (по направлениям)","95 02 07":"техническая эксплуатация электросистем и пилотажно-навигационных комплексов летательных аппаратов","43 01 07":"техническая эксплуатация энергооборудования организаций","95 01 13-03":"управление подразделениями транспортных войск (системы передачи и распределения информации)","31 04 03":"физическая электроника","95 02 05":"эксплуатация автоматизированных систем обработки информации","95 02 06":"эксплуатация автоматизированных систем управления","95 02 03":"эксплуатация радиотехнических систем (по направлениям)","95 02 12":"эксплуатация средств анализа и обработки радиосигналов","43 01 01":"электрические станции","43 01 03":"электроснабжение (по отраслям)","43 01 02":"электроэнергетические системы и сети","74 06 05-01":"энергетическое обеспечение сельского хозяйства (электроэнергетика)","69 01 01":"архитектура","69 01 02":"архитектурный дизайн","70 02 01":"промышленное и гражданское строительство","70 02 02":"экспертиза и управление недвижимостью","70 03 01":"автомобильные дороги","70 04 01":"водохозяйственное строительство","70 03 02":"мосты, транспортные тоннели и метрополитены","70 01 01":"производство строительных изделий и конструкций","70 02 01; 70 02 71":"промышленное и гражданское строительство","74 04 01 01":"сельское строительство и обустройство территорий (строительство и эксплуатация зданий и сооружений для хранения и переработки сельскохозяйственной продукции)","70 07 01":"строительство тепловых и атомных станций","70 04 03; 70 04 72":"водоснабжение, водоотведение и охрана водных ресурсов","70 04 02; 70 04 71":"теплогазоснабжение, вентиляция и охрана воздушного бассейна","43 01 05":"промышленная теплоэнергетика","43 01 71":"техническая эксплуатация теплоэнергетических установок и систем теплоснабжения","43 01 06":"энергоэффективные технологии и энергетический менеджмент","70 04 03; 70 04 71":"водоснабжение, водоотведение и охрана водных ресурсов","70 04 72":"водоснабжение, водоотведение и охрана водных ресурсов","36 20 01":"низкотемпературная техника","43 01 04":"тепловые электрические станции","43 01 08":"паротурбинные установки атомных электростанций","43 01 77":"эксплуатация атомных электрических станций","70 05 71":"сооружение и эксплуатация газопроводов","70 05 01":"проектирование, сооружение и эксплуатация газонефтепроводов и газонефтехранилищ","70 05 74":"проектирование, сооружение и ремонт нефтепроводов и газонефтехранилищ","43 01 72":"техническая эксплуатация объектов газораспределительной системы и газопотребления","70 05 75":"трубопроводный транспорт, хранение и реализация нефтепродуктов","37 04 02-01":"техническая эксплуатация авиационного оборудования (приборное и электросветотехническое оборудование)","37 02 01-02":"тяговый состав железнодорожного транспорта (электрический транспорт и метрополитен)","74 04 01 03":"сельское строительство и обустройство территорий (строительство и эксплуатация внутрихозяйственных дорог)","95 01 13-01":"управление подразделениями транспортных войск (восстановление и строительство путей сообщения)","46 01 01":"лесоинженерное дело","26 02 02-03":"менеджмент (производственный)","27 01":"экономика и организация производства","26 02":"бизнес-управление","94":"защита от чрезвычайных ситуаций","31 03 01-03":"математика (экономическая деятельность)","08 01 01-01":"профессиональное обучение (машиностроение)","08 01 01-07":"профессиональное обучение (информатика)","08 01 01-08":"профессиональное обучение (экономика и управление)","37 04 02-02":"техническая эксплуатация авиационного оборудования (радиоэлектронное оборудование)","37 02 01":"тяговый состав железнодорожного транспорта (по направлениям)","25":"экономика","27":"экономика и организация производства","74 01 01":"экономика и организация производства в отраслях агропромышленного комплекса","28 01 01":"экономика электронного бизнеса","31 03 06":"экономическая кибернетика (по направлениям)","56 02 02":"геоинформационные системы (по направлениям)","56 01 02":"земельный кадастр","56 01 01":"землеустройство","56 02 71":"прикладная геодезия и геодезическое обеспечение кадастра","56 02 31":"топография","51 01 01":"геология и разведка полезных ископаемых","51 02 31":"гидрогеология и инженерная геология","57":"охрана окружающей среды","02 04":"преподавание биологических, географических и химических дисциплин","31 05 01-04":"химия (охрана окружающей среды)","31 05 01-05":"химия (радиационная, химическая и биологическая защита)","33":"экологические науки","70 03 31":"строительство дорог и транспортных объектов","36 01 06":"оборудование и технология сварочного производства (по направлениям)","51 02 01-02":"разработка месторождений полезных ископаемых (подземные горные работы)","51 02 01-04":"разработка месторождений полезных ископаемых (буровые работы)","27 01 01-17":"экономика и организация производства (строительство)","37 02 34":"железнодорожный путь и путевое хозяйство","70 08 31":"обслуживание и эксплуатация жилых домов (по направлениям)","70 02 71":"строительство зданий и сооружений","36 20 04":"вакуумная и компрессорная техника","70 05; 70 05 71":"(монтаж газонефтепроводы и газонефтехранилища","36 10 01":"горные машины и оборудование (по направлениям)","36 08":"легкая промышленность и бытовое обслуживание","36 05":"лесной комплекс","36 01":"машиностроительное оборудование и технологии","36 02; 42 01":"металлургия","36 06":"полиграфия","36 12 01":"проектирование и производство сельскохозяйственной техники","36 09":"производство продуктов питания","08 01 01-04":"деревообработка","70 04":"строительство 08 01 01-05) системы водного хозяйства и теплоснабжения","36 11":"строительство и коммунальное хозяйство","74 06 01":"техническое обеспечение процессов сельскохозяйственного производства","46 01 02":"технология деревообрабатывающих производств","47 02 01":"технология полиграфических производств","36 20 03":"торговое оборудование и технологии","36 20 02-03":"упаковочное производство (технологии и оборудование упаковочного производства)","36 07":"химическое производство","70 04 03":"водоснабжение, водоотведение и охрана водных ресурсов","70 05":"газонефтепроводы и газонефтехранилища","36 20":"общеотраслевое оборудование","74 02 06":"производство, хранение и переработка продукции растениеводства (по направлениям)","70 04 02":"теплогазоснабжение, вентиляция и охрана воздушного бассейна","36 03":"энергетика","27 01 01-04":"экономика и организация производства (коммунальное и водное хозяйство)","74 06 05-02":"энергетическое обеспечение сельского хозяйства (теплоэнергетика)","43 01 75":"энергоэффективные технологии в энергетике","70 04 31":"санитарно-техническое оборудование зданий и сооружений (по направлениям)","53 01 04":"автоматизация и управление теплоэнергетическими процессами","53 01 01":"автоматизация технологических процессов и производств","53 01 05":"автоматизированные электроприводы","36 10 01-05":"горные машины и оборудование (электромеханика)","45 01 02":"инфокоммуникационные системы (по направлениям)","45 01 01":"инфокоммуникационные технологии (по направлениям)","38 02 01":"информационно-измерительная техника","38 01 01":"механические и электромеханические приборы и аппараты","53 01 06":"промышленные роботы и робототехнические комплексы","38 01 02 04":"светотехника и источники света","37 04 02":"техническая эксплуатация авиационного оборудования (по направлениям)","37 02 31":"автоматика и телемеханика на железнодорожном транспорте","38 01 31":"производство и техническая эксплуатация приборов и аппаратов","37 04 02-01 (01; 02; 03)":"техническая эксплуатация авиационного оборудования (приборное электросветотехническое оборудование)","37 02 35":"техническая эксплуатация и ремонт подвижного состава железнодорожного транспорта (по направлениям)","38 01 32":"техническое обслуживание кинооборудования и аудиовизуальных систем","37 02 32":"технологическая связь на железнодорожном транспорте","37 02 33":"электроснабжение на железнодорожном транспорте","74 06 31":"энергетическое обеспечение сельскохозяйственного производства (по правлениям)","31 01 05":"электрический и автономный транспорт","31 03 04":"информатика","31 04 08":"компьютерная физика","31 03 08":"математика и информационные технологии (по направлениям)","31 03 07":"прикладная информатика","95 01 13":"управление подразделениями транспортных войск (системы передачи и распределения информации)","36 03 31":"монтаж и эксплуатация электрооборудования (по направлениям)","94 01 01":"предупреждение и ликвидация чрезвычайных ситуаций","36 04 31":"электронно-оптическое аппаратостроение","46 01 01-02":"лесоинженерное дело (лесные дороги и вывозка древесины)","27 01 01-03":"экономика и организация производства (автодорожное хозяйство)","75 05 75":"трубопроводный транспорт, хранение и реализация нефтегазопродуктов","51 02 02":"разработка и эксплуатация нефтяных и газовых месторождений","27 01 01-05":"экономика и организация производства (железнодорожный транспорт)","51 02 01":"разработка месторождений полезных ископаемых (по направлениям)","56":"землеустройство, геодезия, картография и топография","31 03 09":"компьютерная математика и системный анализ","75":"лесное хозяйство и садово-парковое строительство","31 03 01":"математика (по направлениям)","31 03 03":"прикладная математика (по направлениям)","26":"управление","75 01 01; 75 01 71":"лесное хозяйство","45 01 31":"многоканальные системы телекоммуникаций","45 01 33":"сети телекоммуникаций","45 01 32":"системы радиосвязи, радиовещания и телевидения","36 20 01 02":"низкотемпературная техника (оборудование для кондиционирования воздуха)","43 01 08; 43 01 77":"паротурбинные установки атомных электрических станций","27 01 01-10":"экономика и организация производства (энергетика)","34 01 08":"компьютерная физика","41 01":"радио-, микро- и наноэлектронная техника","45":"связь","36 01 31 01":"производство станков с программным управлением и робототехнических комплексов","36 01 32":"технологическая подготовка и наладка станков и манипуляторов с программным управлением (по направлениям)","44 01 01":"организация дорожного движения","70 05 07":"проектирование и эксплуатация газопроводов","31 02 01":"география","31 02 03":"космоаэрокартография","75 05 74":"проектирование, сооружение и ремонт нефтепроводов и газонефтехранилищ","51 02 01-05":"разработка месторождений полезных ископаемых (маркшейдерское дело)","70 06 71":"управление проектами в строительстве","36 07 01":"машины и аппараты химических производств и предприятий строительных материалов","36 05 01":"машины и оборудование лесного комплекса","94 01":"предупреждение и ликвидация чрезвычайных ситуаций","48 01":"производство химическое","51 02":"разработка месторождений полезных ископаемых","25 01 07 13":"экономика и управление на предприятии строительства","43 01":"электроэнергетика и теплоэнергетика","98":"информационная безопасность","36 04":"радиоэлектроника"},"records":[{"i":1,"a":"Разработка разделов проектной документации","sp":"Главный инженер проекта","hi":["53","37 02 04","69","56 02 01","51","37 01 05","56 01","45 01","50","46","75 01 01","74 05 01","42","36","44 01 02","44 01 03","57 01","49","08 01 01-05","08 01 01-03","75 02 01","74 04 01","70","37 02 05","74 06 02","38 02 03","91 01 01","48","43","74 06 05"],"sr":[]},{"i":2,"a":"Разработка разделов проектной документации","sp":"Главный инженер проекта (связь и сигнализация, видеонаблюдение)","hi":["95 02 10","37 02 04","53","31 04 04","37 01 05","43 01 78","98 01 02","94 02 72","55","45 01","40","53 01 07","41","98 01 01","98 01 71","54 01 02","94 02 02","94 01 01; 94 01 71","38","31 03 07; 31 03 74","36 04 01","98 01 03","94 02 71","36 04 02","08 01 01-02","31 04 02","39","43 01 09","95 02 04","95 02 07","43 01 07","95 01 13-03","31 04 03","95 02 05","95 02 06","95 02 03","95 02 12","43 01 01","43 01 03","43 01 02","74 06 05-01"],"sr":[]},{"i":3,"a":"Разработка разделов проектной документации","sp":"Главный архитектор проекта","hi":["69 01 01","69 01 02"],"sr":["69 01 01","70 02 01","70 02 02","74 04 01"]},{"i":4,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (конструктивные решения)","hi":["70 03 01","70 04 01","70 03 02","70 01 01","70 02 01; 70 02 71","08 01 01-05","74 04 01 01","37 02 05","70 07 01","70 02 02"],"sr":[]},{"i":5,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (архитектурные решения)","hi":["69 01 01","69 01 02"],"sr":["69 01 01"]},{"i":6,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (инженерное оборудование, сети и системы (водоснабжение и канализация))","hi":["70 04 03; 70 04 72","70 04 02; 70 04 71","74 04 01","74 05 01"],"sr":[]},{"i":7,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (инженерное оборудование, сети и системы (отопление, вентиляция и кондиционирование воздуха, тепловые сети))","hi":["70 04 02; 70 04 71","43 01 78","43 01 05","43 01 71","43 01 07","74 06 05","43 01 06"],"sr":[]},{"i":8,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (инженерное оборудование, сети и системы (отопление, вентиляция и кондиционирование воздуха))","hi":["70 04 03; 70 04 71","70 04 72","70 04 02; 70 04 71","43 01 78","36 20 01","43 01 05","43 01 71","43 01 07","74 06 05","43 01 06"],"sr":[]},{"i":9,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (инженерное оборудование, сети и системы (тепловые сети))","hi":["43 01 05","43 01 04","70 04 02; 70 04 71","43 01 71","43 01 07","74 06 05","43 01 06","43 01 78","43 01 08","43 01 77"],"sr":[]},{"i":10,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (инженерное оборудование, сети и системы (система газоснабжения))","hi":["70 05 71","70 05 01","70 05 74","43 01 05","70 04 02; 70 04 71","43 01 72","43 01 71","70 05 75"],"sr":[]},{"i":11,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (инженерное оборудование, сети и системы (холодоснабжение))","hi":["36 20 01","70 04 02; 70 04 71"],"sr":[]},{"i":12,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (инженерное оборудование, сети и системы (электроснабжение, силовое электрооборудование и электроосвещение))","hi":["53","37 02 04","43 01 01","43 01 03","43 01 02","74 06 05-01","37 01 05","43 01 78","37 04 02-01","43 01 07","37 02 01-02"],"sr":[]},{"i":13,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (инженерное оборудование, сети и системы (связь и сигнализация, видеонаблюдение))","hi":["95 02 10","37 02 04","53","31 04 04","37 01 05","43 01 78","98 01 02","94 02 72","55","40","45 01","41","98 01 01","98 01 71","54 01 02","94 02 02","94 01 01; 94 01 71","38","31 03 07; 31 03 74","36 04 01","98 01 03","94 02 71","36 04 02","08 01 01-02","31 04 02","39","43 01 09","95 02 04","43 01 07","95 02 07","31 04 03","95 01 13-03","95 02 05","95 02 06","95 02 03","95 02 12","43 01 01","43 01 03","43 01 02","74 06 05-01"],"sr":[]},{"i":14,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (инженерное оборудование, сети и системы (автоматизация))","hi":["53","37 02 04","37 01 05","43 01 78","44 01 02","38","36 04 01","36 04 02","43 01 09","43 01 07","95 01 13-03","95 02 06","43 01 01","43 01 03","43 01 02","74 06 05-01"],"sr":[]},{"i":15,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (технические решения по автомобильным дорогам)","hi":["70 03 01","70 03 02","74 05 01","44 01 02","74 04 01 03","37 02 05","95 01 13-01"],"sr":[]},{"i":16,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (генеральный план и транспорт)","hi":["70 03 01","69","56 02 01","56 01","75 01 01","74 05 01","44 01 02","44 01 03","70 02 01; 70 02 71","08 01 01-05","75 02 01","74 04 01","37 02 05","70 07 01"],"sr":[]},{"i":17,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (организация строительства)","hi":["53","37 02 04","69","51","37 01 05","45 01","75 01 01","46 01 01","74 05 01","26 02 02-03","44 01 02","44 01 03","94 01 01; 94 01 71","08 01 01-05","08 01 01-03","74 04 01","70","37 02 05","95 02 04","38 02 03","27 01","43","74 06 05"],"sr":[]},{"i":18,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (сметная документация)","hi":["95 02 10","53","69","37 02 04","31 04 04","26 02","56 02 01","51","37 01 05","43 01 78","98 01 02","94","55","45 01","40","41","98 01 01","50","46","75 01 01","31 03 01-03","98 01 71","42","74 05 01","36","44 01 02","57 01","49","38","31 03 07; 31 03 74","36 04 01","08 01 01-05","08 01 01-01","08 01 01-07","08 01 01-02","08 01 01-03","08 01 01-08","31 04 02","39","75 02 01","74 04 01","70","37 02 05","95 02 04","37 04 02-01","37 04 02-02","95 02 07","37 02 01","95 01 13-01","95 01 13-03","31 04 03","48","25","27","74 01 01","28 01 01","31 03 06","95 02 05","95 02 06","95 02 03","95 02 12","43","74 06 05"],"sr":[]},{"i":19,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (охрана окружающей среды)","hi":[],"sr":[]},{"i":20,"a":"Разработка разделов проектной документации","sp":"Главный специалист, осуществляющий разработку раздела проектной документации (инженерно-технические мероприятия гражданской обороны. Мероприятия по предупреждению чрезвычайных ситуаций)","hi":[],"sr":[]},{"i":21,"a":"Изыскательские работы","sp":"Специалист, осуществляющий инженерно-геодезические изыскания","hi":["56 02 01","56 02 02","56 01 02","56 01 01","56 02 71"],"sr":["56 02 01","56 01 01","56 02 31"]},{"i":22,"a":"Изыскательские работы","sp":"Специалист, осуществляющий инженерно-геологические изыскания","hi":["51 01 01"],"sr":["51 01 01","51 02 31"]},{"i":23,"a":"Изыскательские работы","sp":"Специалист, осуществляющий инженерно-геоэкологические изыскания","hi":["57","02 04","31 05 01-04","31 05 01-05","33"],"sr":["57"]},{"i":24,"a":"Обследование объектов","sp":"Специалист, осуществляющий обследование строительных конструкций объектов","hi":["70 04 01","70 03 02","70 01 01","70 02 01; 70 02 71","70 07 01","70 02 02"],"sr":["70 02 01"]},{"i":25,"a":"Обследование объектов","sp":"Специалист, осуществляющий обследование автомобильных дорог, мостовых сооружений и труб на них, аэродромных покрытий","hi":["70 03 01","70 03 02","44 01 02","70 02 01; 70 02 71","37 02 05","95 01 13-01"],"sr":["70 03 31"]},{"i":26,"a":"Строительно-монтажные работы","sp":"Главный инженер (общестроительные работы)","hi":["70 03 01","69 01 01","70 04 01","74 05 01","70 03 02","36 01 06","70 01 01","70 02 01; 70 02 71","08 01 01-05","51 02 01-02","51 02 01-04","74 04 01","37 02 05","70 07 01","95 01 13-01","27 01 01-17","70 02 02"],"sr":["69 01 01","37 02 34","74 05 01","70 08 31","70 01 01","70 02 01","51 02 01-02","70 03 31","70 02 71"]},{"i":27,"a":"Строительно-монтажные работы","sp":"Главный инженер (монтаж технологических трубопроводов и оборудования)","hi":["36 20 04","70 05; 70 05 71","36 10 01","50","36 08","36 05","46 01 01","36 01","36 02; 42 01","36 20 01","43 01 08","49","36 06","36 12 01","36 09","70 01 01","43 01 05","70 02 01","08 01 01-01","08 01 01-04","70 04","36 11","70 07 01","43 01 04","43 01 07","74 06 01","74 06 02","46 01 02","47 02 01","36 20 03","36 20 02-03","48","36 07","43 01 01"],"sr":["70 04 03","70 05","36 10 01","50","36 08","46","36 05","36 01","36 02; 42 01","36 20","49","36 09","70 01 01","74 02 06","43 01 05","70 02 01","36 11","43 01 04","70 04 02","74 06 01","46 01 02","47 02 01","48","36 07","43 01 01","36 03"]},{"i":28,"a":"Строительно-монтажные работы","sp":"Главный инженер (монтаж тепловых сетей, наружных сетей водоснабжения и канализации, внутренних систем водоснабжения и канализации, водостоков, систем отопления, теплоснабжения вентиляционных установок, вентиляции и кондиционирования воздуха)","hi":["70 04 03; 70 04 72","70 04 01","43 01 78","74 05 01","36 01 06","43 01 08","70 02 01; 70 02 71","43 01 05","74 04 01","70 07 01","43 01 04","70 04 02; 70 04 71","43 01 71","43 01 07","27 01 01-04","70 02 02","43 01 77","74 06 05-02","43 01 06","43 01 75"],"sr":["70 04 03","74 05 01","70 08 31","43 01 05","70 02 01","70 04 31","70 02 71","43 01 04","70 04 02"]},{"i":29,"a":"Строительно-монтажные работы","sp":"Главный инженер (монтаж систем холодоснабжения)","hi":["36 20 01","70 04 02; 70 04 71"],"sr":["36 20 01"]},{"i":30,"a":"Строительно-монтажные работы","sp":"Главный инженер (устройство тепловой изоляции оборудования и трубопроводов)","hi":["70 04 03; 70 04 72","70 04 01","43 01 78","74 05 01","36 01 06","43 01 08","70 05 71","70 05 74","70 05 01","43 01 05","70 02 01; 70 02 71","74 04 01","70 07 01","43 01 04","70 04 02; 70 04 71","43 01 72","43 01 71","43 01 07","70 05 75","27 01 01-04","70 02 02","43 01 77","74 06 05-02","43 01 06","43 01 75"],"sr":["70 04 03","74 05 01","36 01 06","70 08 31","43 01 05","70 02 01","70 04 31","70 05 71","70 02 71","43 01 04","70 04 02"]},{"i":31,"a":"Строительно-монтажные работы","sp":"Главный инженер (монтаж наружных сетей электроснабжения, трансформаторных подстанций и распределительных устройств, внутренних систем электроснабжения)","hi":["53 01 04","53 01 01","53 01 05","37 02 04","36 10 01-05","37 01 05","43 01 78","45 01 02","45 01 01","38 02 01","38 01 01","53 01 06","08 01 01-03","43 01 09","38 01 02 04","95 02 04","37 04 02","95 02 07","43 01 07","38 02 03","37 02 01","95 01 13-03","95 02 06","95 02 03","43 01 01","43 01 03","43 01 02","74 06 05-01","43 01 06","43 01 75"],"sr":["53 01 04","53 01 01","53 01 05","37 02 31","36 10 01","37 01 05","45 01","70 08 31","38 01 31","53 01 06","37 04 02-01 (01; 02; 03)","37 02 35","38 01 32","37 02 32","43 01 01","43 01 03","37 02 33","36 03","74 06 31"]},{"i":32,"a":"Строительно-монтажные работы","sp":"Главный инженер (устройство систем связи и сигнализации, видеонаблюдения)","hi":["95 02 10","53","37 02 04","31 04 04","36 10 01-05","31 01 05","43 01 78","98 01 02","94 02 72","55","45 01 02","45 01 01","31 03 04","40","41","98 01 01","31 04 08","31 03 08","98 01 71","54 01 02","94 02 02","94 01 01; 94 01 71","38","31 03 07","98 01 03","36 04 01","94 02 71","36 04 02","08 01 01-07","08 01 01-02","08 01 01-03","31 04 02","39","43 01 09","95 02 04","37 04 02","95 02 07","43 01 07","37 02 01","95 01 13","31 04 03","95 02 05","95 02 06","95 02 03","95 02 12","43 01 01","43 01 03","43 01 02","74 06 05-01","43 01 75","43 01 06"],"sr":["53","37 02 31","40","36 10 01","37 01 05","45 01","41","36 03 31","94 01 01","38","39","37 04 02","37 02 32","43 01 01","36 04 31","43 01 03","37 02 33","74 06 31"]},{"i":33,"a":"Строительно-монтажные работы","sp":"Главный инженер (монтаж систем автоматизации)","hi":["53","37 02 04","36 10 01-05","37 01 05","43 01 78","45 01 01","38","36 04 01","36 04 02","08 01 01-03","43 01 09","37 04 02-01","43 01 07","37 02 01","95 01 13-03","95 02 05","95 02 06","43 01 01","43 01 03","43 01 02","74 06 05-01","43 01 75","43 01 06"],"sr":["53","37 02 31","36 10 01","37 01 05","36 03 31","38 01 31","43 01 01","43 01 03","37 02 33","74 06 31"]},{"i":34,"a":"Строительно-монтажные работы","sp":"Главный инженер (мелиоративные системы и сооружения, гидротехнические сооружения)","hi":["70 04 03; 70 04 72","70 04 01","74 05 01","70 02 01; 70 02 71","08 01 01-05","74 04 01","70 07 01"],"sr":["70 04 01","74 05 01","70 02 01","70 02 71"]},{"i":35,"a":"Строительно-монтажные работы","sp":"Главный инженер (устройство дорог, аэродромов, мостовых сооружений и труб)","hi":["70 03 01","70 04 01","46 01 01-02","74 05 01","70 03 02","44 01 02","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","95 01 13-01","27 01 01-03"],"sr":["37 02 34","74 05 01","70 02 01","70 03 31","70 02 71"]},{"i":36,"a":"Строительно-монтажные работы","sp":"Главный инженер (благоустройство территорий)","hi":["70 03 01","69 01 01","69 01 02","70 04 01","75 01 01","46 01 01-02","74 05 01","70 03 02","44 01 02","70 01 01","70 02 01; 70 02 71","08 01 01-05","75 02 01","74 04 01","37 02 05","70 07 01","95 01 13-01","27 01 01-03","70 02 02"],"sr":["69 01 01","37 02 34","74 05 01","70 02 01","75 02 01","70 03 31","70 02 71"]},{"i":37,"a":"Строительно-монтажные работы","sp":"Главный инженер (монтаж объектов газораспределительной системы, газопотребления)","hi":["36 01 06","70 05 71","70 05 74","70 05 01","43 01 05","70 04 02; 70 04 71","43 01 71","43 01 72","75 05 75"],"sr":["36 01 06","43 01 05","51 02 02","70 04 31","70 05 71","70 04 02"]},{"i":38,"a":"Строительно-монтажные работы","sp":"Главный инженер (строительство железных дорог и мостовых сооружений на железных дорогах)","hi":["70 03 01","70 04 01","70 03 02","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","95 01 13-01","27 01 01-05"],"sr":["37 02 34","70 02 01","70 03 31","70 02 71"]},{"i":39,"a":"Строительно-монтажные работы","sp":"Главный инженер (устройство тоннелей и метрополитенов)","hi":["70 03 02","70 02 01; 70 02 71","51 02 01","37 02 05"],"sr":["70 02 01","51 02 01","70 02 71"]},{"i":40,"a":"Строительно-монтажные работы","sp":"Инженер по сметной работе (сметчик)","hi":["95 02 10","53","37 02 04","69","31 04 04","26 02","51","36 10 01-05","37 01 05","98 01 02","94","56","55","45 01 02","45 01 01","31 03 04","40","41","31 03 09","31 04 08","50","46","75","31 03 01","31 03 08","98 01 71","74 05 01","42","54 01 02","36","44 01 02","49","38","31 03 07; 31 03 74","31 03 03","98 01 03","36 04 01","36 04 02","08 01 01-07","08 01 01-02","08 01 01-01","08 01 01-05","08 01 01-03","08 01 01-08","31 04 02","51 02 01-02","51 02 01-04","39","74 04 01","70","37 02 05","95 02 04","37 04 02","95 02 07","37 02 01","26","95 01 13-01","95 01 13-03","31 04 03","48","25","27","74 01 01","28 01 01","31 03 06","95 02 05","95 02 06","95 02 03","43","74 06 05"],"sr":["53","37 02 31","69","26 02","40","51","36 10 01","37 01 05","37 02 34","41","50","46","75 01 01; 75 01 71","74 05 01","42","45 01 31","36","49","94 01 01","38","39","51 02 01-02","75 02 01","74 04 01","45 01 33","70","45 01 32","37 02 05","37 04 02","37 02 32","48","25","27","37 02 33","43","74 06 31"]},{"i":41,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (общестроительные работы)","hi":["70 03 01","69 01 01","70 04 01","70 03 02","70 01 01","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","95 01 13-01","70 02 02","70 04 03; 70 04 72","74 05 01","36 01 06","51 02 01-04","51 02 01-02","70 04 02; 70 04 71","27 01 01-17"],"sr":["69 01 01","70 08 31","70 01 01","70 02 01","70 03 31","70 02 71","37 02 34","74 05 01","36 01 06","51 02 01-02"]},{"i":42,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (устройство тепловой изоляции наружных ограждающих конструкций)","hi":["70 03 01","69 01 01","70 04 01","70 03 02","70 01 01","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","70 02 02","70 04 03; 70 04 72","74 05 01","36 01 06","51 02 01-04","51 02 01-02","70 04 02; 70 04 71","27 01 01-17"],"sr":["69 01 01","70 08 31","70 01 01","70 02 01","70 03 31","70 02 71","37 02 34","74 05 01","36 01 06","51 02 01-02"]},{"i":43,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (заполнение оконных и дверных проемов, устройство полов, отделочные работы)","hi":["70 03 01","69 01 01","69 01 02","70 04 01","70 03 02","70 01 01","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","70 02 02","70 04 03; 70 04 72","74 05 01","36 01 06","70 04 02; 70 04 71","27 01 01-17"],"sr":["69 01 01","70 08 31","70 01 01","70 02 01","70 03 31","70 02 71","37 02 34","74 05 01","36 01 06"]},{"i":44,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (монтаж технологических трубопроводов и оборудования)","hi":["36 20 04","70 05","36 10 01","36 08","50","36 05","46 01 01","36 01","36 02; 42 01","36 20 01","43 01 08","49","36 06","36 12 01","36 09","70 01 01","43 01 05","70 02 01","08 01 01-01","08 01 01-04","70 04","36 11","70 07 01","43 01 04","43 01 07","74 06 01","74 06 02","46 01 02","47 02 01","36 20 03","36 20 02-03","48","36 07","43 01 01"],"sr":["70 04 03","36 10 01","36 08","50","46","36 05","36 01","36 02; 42 01","36 20","49","36 09","70 01 01","74 02 06","43 01 05","70 02 01","36 11","43 01 04","70 04 02","74 06 01","46 01 02","47 02 01","48","36 07","36 03","43 01 01"]},{"i":45,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (монтаж наружных сетей водоснабжения и канализации, внутренних систем водоснабжения, канализации и водостоков)","hi":["70 04 03; 70 04 72","70 04 01","43 01 78","74 05 01","36 01 06","43 01 08","43 01 05","70 02 01; 70 02 71","08 01 01-05","74 04 01","70 07 01","43 01 04","70 04 02; 70 04 71","43 01 71","43 01 07","27 01 01-04","70 02 02","74 06 05-02"],"sr":["70 04 03","74 05 01","36 01 06","70 08 31","43 01 05","70 02 01","70 04 31","70 02 71","43 01 04","70 04 02"]},{"i":46,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (монтаж тепловых сетей, систем отопления и теплоснабжения вентиляционных установок, вентиляции и кондиционирования воздуха)","hi":["70 04 03; 70 04 72","70 04 01","43 01 78","74 05 01","36 01 06","43 01 08","43 01 05","70 02 01; 70 02 71","74 04 01","70 07 01","43 01 04","70 04 02; 70 04 71","43 01 71","43 01 07","27 01 01-04","70 02 02","43 01 77","74 06 05-02","43 01 75","43 01 06"],"sr":["70 04 03","74 05 01","36 01 06","70 08 31","43 01 05","70 02 01","70 04 31","70 02 71","43 01 04","70 04 02"]},{"i":47,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (монтаж систем холодоснабжения)","hi":["36 20 01","70 04 02"],"sr":["36 20 01"]},{"i":48,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (монтаж объектов газораспределительной системы, газопотребления)","hi":["36 01 06","70 05 71","70 05 74","70 05 01","43 01 05","70 04 02; 70 04 71","43 01 72","43 01 71","75 05 75","70 02 01; 70 02 71"],"sr":["36 01 06","43 01 05","70 04 31","70 05 71","70 04 02"]},{"i":49,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (устройство тепловой изоляции оборудования и трубопроводов)","hi":["70 04 03; 70 04 72","70 04 01","43 01 78","74 05 01","36 20 01 02","36 01 06","43 01 08; 43 01 77","70 05 71","70 05 74","70 05 01","43 01 05","70 02 01; 70 02 71","08 01 01-05","74 04 01","70 07 01","43 01 04","70 04 02; 70 04 71","43 01 72","43 01 71","43 01 07","70 05 75","27 01 01-04","70 02 02","74 06 05-02","43 01 75","43 01 06"],"sr":["70 04 03","74 05 01","36 01 06","70 08 31","43 01 05","70 02 01","70 04 31","70 05 71","70 02 71","43 01 04","70 04 02"]},{"i":50,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (монтаж наружных сетей электроснабжения, трансформаторных подстанций и распределительных устройств, внутренних систем электроснабжения)","hi":["53 01 04","53 01 01","53 01 05","37 02 04","36 10 01-05","37 01 05","43 01 78","45 01 02","45 01 01","38 02 01","38 01 01","53 01 06","08 01 01-03","43 01 09","38 01 02 04","95 02 04","37 04 02","95 02 07","43 01 07","38 02 03","37 02 01","95 01 13-03","27 01 01-10","95 02 03","43 01 01","43 01 03","43 01 02","74 06 05-01","43 01 75","43 01 06"],"sr":["53 01 04","53 01 01","53 01 05","37 02 31","36 10 01","37 01 05","45 01","70 08 31","38 01 31","53 01 06","37 04 02-01 (01; 02; 03)","37 02 35","38 01 32","37 02 32","43 01 01","43 01 03","37 02 33","36 03","74 06 31"]},{"i":51,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (устройство систем связи и сигнализации, видеонаблюдения)","hi":["95 02 10","53","37 02 04","31 04 04","37 01 05","43 01 78","98 01 02","94 02 72","55","45 01 02","45 01 01","31 03 04","40","41","98 01 01","34 01 08","31 03 08","98 01 71","54 01 02","36","94 02 02","94 01 01; 94 01 71","38","31 03 07; 31 03 74","98 01 03","94 02 71","08 01 01-07","08 01 01-02","08 01 01-03","31 04 02","39","43 01 09","95 02 04","37 04 02","95 02 07","43 01 07","38 02 03","37 02 01","95 01 13-03","31 04 03","95 02 05","95 02 06","95 02 03","95 02 12","43 01 01","43 01 03","43 01 02","74 06 05-01"],"sr":["53","37 02 31","40","37 01 05","41","45 01 31","36","94 01 01","38","39","45 01 33","45 01 32","37 04 02","37 02 35","37 02 32","43 01 01","43 01 03","37 02 33","74 06 31"]},{"i":52,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (монтаж систем автоматизации)","hi":["53","37 02 04","36 10 01-05","37 01 05","43 01 78","94 02 02","38","36 04 01","36 04 02","08 01 01-03","41 01","43 01 09","45","37 04 02-01","43 01 07","37 02 01","95 01 13-03","95 02 05","95 02 06","43 01 01","43 01 03","43 01 02","74 06 05-01","43 01 75","43 01 06"],"sr":["53","37 02 31","37 04 02-01","36 10 01","37 01 05","36 03 31","38 01 31","36 01 31 01","45","36 01 32","43 01 01","43 01 03","37 02 33","74 06 31"]},{"i":53,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (устройство дорог, аэродромов, мостовых сооружений и труб)","hi":["70 03 01","70 04 01","46 01 01-02","74 05 01","70 03 02","44 01 02","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","95 01 13-01","27 01 01-03","56 02 01"],"sr":["37 02 34","74 05 01","70 02 01","70 03 31","70 02 71","56 02 01"]},{"i":54,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (благоустройство территорий)","hi":["70 03 01","69 01 01","69 01 02","70 04 01","70 04 03; 70 04 72","56 02 01","56 01 01","75 01 01","46 01 01-02","74 05 01","70 03 02","44 01 01","70 01 01","70 02 01; 70 02 71","08 01 01-05","75 02 01","74 04 01","37 02 05","70 07 01","70 04 02; 70 04 71","95 01 13-01","27 01 01-03","70 02 02"],"sr":["69 01 01","56 02 01","37 02 34","56 01 01","75 01 01; 75 01 71","74 05 01","70 01 01","70 02 01","75 02 01","70 03 31","70 02 71"]},{"i":55,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (мелиоративные системы и сооружения)","hi":["70 04 03; 70 04 72","70 04 01","56 02 01","74 05 01","70 02 01; 70 02 71","74 04 01","70 07 01"],"sr":["70 04 03","56 02 01","74 05 01","70 02 01","70 02 71"]},{"i":56,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (гидротехнические сооружения)","hi":["70 04 01","74 05 01","70 02 01; 70 02 71","08 01 01-05","74 04 01","70 07 01"],"sr":["74 05 01","70 02 01","70 02 71"]},{"i":57,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (строительство железных дорог и мостовых сооружений на железных дорогах)","hi":["70 03 01","70 04 01","70 03 02","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","95 01 13-01","27 01 01-05"],"sr":["37 02 34","70 02 01","70 03 31","70 02 71"]},{"i":58,"a":"Строительно-монтажные работы","sp":"Производитель работ (прораб) (устройство тоннелей и метрополитенов)","hi":["70 03 02","70 02 01; 70 02 71","51 02 01","37 02 05"],"sr":["70 02 01","51 02 01","70 02 71"]},{"i":59,"a":"Строительно-монтажные работы","sp":"Мастер (общестроительные работы)","hi":["70 03 01","69 01 01","70 04 01","70 03 02","70 01 01","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","95 01 13-01","70 02 02","70 04 03; 70 04 72","74 05 01","36 01 06","51 02 01-04","51 02 01-02","70 04 02; 70 04 71","27 01 01-17"],"sr":["69 01 01","70 08 31","70 01 01","70 02 01","70 03 31","70 02 71","37 02 34","74 05 01","36 01 06","51 02 01-02"]},{"i":60,"a":"Строительно-монтажные работы","sp":"Мастер (устройство тепловой изоляции наружных ограждающих конструкций)","hi":["70 03 01","69 01 01","69 01 02","70 04 01","70 03 02","70 01 01","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","70 02 02","70 04 03; 70 04 72","74 05 01","51 02 01-04","51 02 01-02","36 01 06","70 04 02; 70 04 71","27 01 01-17"],"sr":["69 01 01","70 08 31","70 01 01","70 02 01","70 03 31","70 02 71","37 02 34","74 05 01","36 01 06","51 02 01-02"]},{"i":61,"a":"Строительно-монтажные работы","sp":"Мастер (заполнение оконных и дверных проемов, устройство полов, отделочные работы)","hi":["70 03 01","69 01 01","69 01 02","70 04 01","70 03 02","70 01 01","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","70 02 02","70 04 03; 70 04 72","74 05 01","36 01 06","70 04 02; 70 04 71","27 01 01-17"],"sr":["69 01 01","70 08 31","70 01 01","70 02 01","70 03 31","70 02 71","37 02 34","74 05 01","36 01 06"]},{"i":62,"a":"Строительно-монтажные работы","sp":"Мастер (монтаж технологических трубопроводов и оборудования)","hi":["36 20 04","70 05","36 10 01","50","36 08","36 05","46 01 01","36 20 01","36 01","36 02; 42 01","43 01 08","49","36 06","36 12 01","36 09","70 01 01","43 01 05","70 02 01","08 01 01-01","08 01 01-04","70 04","36 11","70 07 01","43 01 04","43 01 07","74 06 01","74 06 02","46 01 02","47 02 01","36 20 03","36 20 02-03","48","36 07","43 01 01"],"sr":["70 04 03","36 10 01","50","36 08","46","36 05","36 01","36 02; 42 01","36 20","49","36 09","70 01 01","74 02 06","43 01 05","70 02 01","36 11","43 01 04","70 04 02","74 06 01","46 01 02","47 02 01","48","36 07","36 03","43 01 01"]},{"i":63,"a":"Строительно-монтажные работы","sp":"Мастер (монтаж наружных сетей водоснабжения и канализации, внутренних систем водоснабжения, канализации и водостоков)","hi":["70 04 03; 70 04 72","70 04 01","43 01 78","74 05 01","36 01 06","43 01 08","43 01 05","70 02 01","08 01 01-05","74 04 01","70 07 01","43 01 04","70 04 02; 70 04 71","43 01 71","43 01 07","27 01 01-04","70 02 02","74 06 05-02"],"sr":["70 04 03","74 05 01","36 01 06","70 08 31","43 01 05","70 02 01","70 04 31","70 02 71","43 01 04","70 04 02"]},{"i":64,"a":"Строительно-монтажные работы","sp":"Мастер (монтаж тепловых сетей, систем отопления, теплоснабжения вентиляционных установок, вентиляции и кондиционирования воздуха)","hi":["70 04 03; 70 04 72","70 04 01","43 01 78","74 05 01","36 01 06","43 01 08","43 01 05","70 02 01; 70 02 71","74 04 01","70 07 01","43 01 04","70 04 02; 70 04 71","43 01 71","43 01 07","27 01 01-04","70 02 02","43 01 77","74 06 05-02","43 01 75","43 01 06"],"sr":["70 04 03","74 05 01","36 01 06","70 08 31","43 01 05","70 02 01","70 04 31","70 02 71","43 01 04","70 04 02"]},{"i":65,"a":"Строительно-монтажные работы","sp":"Мастер (монтаж систем холодоснабжения)","hi":["36 20 01","70 04 02"],"sr":["36 20 01"]},{"i":66,"a":"Строительно-монтажные работы","sp":"Мастер (монтаж объектов газораспределительной системы, газопотребления)","hi":["36 01 06","70 05 71","70 05 74","70 05 01","43 01 05","70 04 02; 70 04 71","43 01 72","43 01 71","75 05 75","70 02 01; 70 02 71"],"sr":["36 01 06","43 01 05","70 04 31","70 05 71","70 04 02"]},{"i":67,"a":"Строительно-монтажные работы","sp":"Мастер (устройство тепловой изоляции оборудования и трубопроводов)","hi":["70 04 03; 70 04 72","70 04 01","43 01 78","74 05 01","36 20 01 02","36 01 06","43 01 08; 43 01 77","70 05 07","70 05 74","70 05 01","43 01 05","70 02 01; 70 02 71","08 01 01-05","74 04 01","70 07 01","43 01 04","70 04 02; 70 04 71","43 01 72","43 01 71","43 01 07","70 05 75","27 01 01-04","70 02 02","74 06 05-02","43 01 75","43 01 06"],"sr":["70 04 03","74 05 01","36 01 06","70 08 31","43 01 05","70 02 01","70 04 31","70 05 71","70 02 71","43 01 04","70 04 02"]},{"i":68,"a":"Строительно-монтажные работы","sp":"Мастер (монтаж наружных сетей электроснабжения, трансформаторных подстанций и распределительных устройств, внутренних систем электроснабжения)","hi":["53 01 04","53 01 01","53 01 05","37 02 04","36 10 01-05","43 01 78","45 01 02","45 01 01","38 02 01","38 01 01","53 01 06","08 01 01-03","43 01 09","38 01 02 04","95 02 04","37 04 02","95 02 07","43 01 07","38 02 03","37 02 01","95 01 13-03","27 01 01-10","95 02 03","43 01 75","43 01 06","43 01 01","43 01 03","43 01 02","37 01 05","74 06 05-01"],"sr":["53 01 04","53 01 01","53 01 05","37 02 31","36 10 01","37 01 05","45 01","70 08 31","38 01 31","53 01 06","37 04 02-01 (01; 02; 03)","37 02 35","38 01 32","37 02 32","43 01 01","43 01 03","37 02 33","36 03","74 06 31"]},{"i":69,"a":"Строительно-монтажные работы","sp":"Мастер (устройство сетей связи и сигнализации, видеонаблюдения)","hi":["95 02 10","53","37 02 04","31 04 04","36 10 01-05","37 01 05","43 01 78","98 01 02","94 02 72","55","45 01 02","45 01 01","31 03 04","40","53 01 07","41","98 01 01","31 04 08","31 03 08","98 01 71","54 01 02","94 02 02","94 01 01; 94 01 71","38","31 03 07; 31 03 74","98 01 03","36 04 01","94 02 71","36 04 02","08 01 01-07","08 01 01-02","08 01 01-03","31 04 02","39","43 01 09","95 02 04","37 04 02","95 02 07","43 01 07","38 02 03","37 02 01","95 01 13","31 04 03","95 02 05","95 02 06","95 02 03","95 02 12","43 01 01","43 01 03","43 01 02","74 06 05-01"],"sr":["53","37 02 31","40","36 10 01","37 01 05","45 01","41","36 03 31","94 01 01","38","39","37 04 02","37 02 32","43 01 01","36 04 31","43 01 03","37 02 33","74 06 31"]},{"i":70,"a":"Строительно-монтажные работы","sp":"Мастер (монтаж систем автоматизации)","hi":["53","37 02 04","36 10 01-05","37 01 05","43 01 78","94 02 02","38","36 04 01","36 04 02","08 01 01-03","41 01","43 01 09","45","37 04 02-01","43 01 07","37 02 01","95 01 13-03","95 02 05","95 02 06","43 01 01","43 01 03","43 01 02","74 06 05-01","43 01 75","43 01 06"],"sr":["53","37 02 31","37 04 02-01","36 10 01","37 01 05","36 03 31","38 01 31","36 01 31 01","45","36 01 32","43 01 01","43 01 03","37 02 33","74 06 31"]},{"i":71,"a":"Строительно-монтажные работы","sp":"Мастер (устройство дорог, аэродромов, мостовых сооружений и труб)","hi":["70 03 01","70 04 01","46 01 01-02","74 05 01","70 03 02","44 01 02","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","95 01 13-01","27 01 01-03","56 02 01"],"sr":["37 02 34","74 05 01","70 02 01","70 03 31","70 02 71","56 02 01"]},{"i":72,"a":"Строительно-монтажные работы","sp":"Мастер (благоустройство территорий)","hi":["70 03 01","69 01 01","69 01 02","70 04 01","56 02 01","56 01 01","75 01 01","46 01 01-02","74 05 01","70 03 02","44 01 02","70 01 01","70 02 01; 70 02 71","08 01 01-05","75 02 01","74 04 01","37 02 05","70 07 01","70 04 02; 70 04 71","95 01 13-01","27 01 01-03","70 02 02","70 04 03; 70 04 72"],"sr":["69 01 01","56 02 01","37 02 34","56 01 01","75 01 01; 75 01 71","74 05 01","70 01 01","70 02 01","75 02 01","70 03 31","70 02 71"]},{"i":73,"a":"Строительно-монтажные работы","sp":"Мастер (мелиоративные системы и сооружения)","hi":["70 04 03; 70 04 72","70 04 01","56 02 01","74 05 01","70 02 01; 70 02 71","74 04 01","70 07 01"],"sr":["70 04 03","56 02 01","74 05 01","70 02 01","70 02 71"]},{"i":74,"a":"Строительно-монтажные работы","sp":"Мастер (гидротехнические сооружения)","hi":["70 04 01","74 05 01","70 02 01; 70 02 71","08 01 01-05","74 04 01","70 07 01"],"sr":["74 05 01","70 02 01","70 02 71"]},{"i":75,"a":"Строительно-монтажные работы","sp":"Мастер (строительство железных дорог и мостовых сооружений на железных дорогах)","hi":["70 03 01","70 04 01","70 03 02","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","95 01 13-01","27 01 01-05"],"sr":["37 02 34","70 02 01","70 03 31","70 02 71"]},{"i":76,"a":"Строительно-монтажные работы","sp":"Мастер (устройство тоннелей и метрополитенов)","hi":["70 03 02","70 02 01; 70 02 71","51 02 01","37 02 05"],"sr":["70 02 01","51 02 01","70 02 71"]},{"i":77,"a":"Строительно-монтажные работы","sp":"Ведущий геодезист","hi":["56 02 01","56 02 02","56 01 02","56 01 01","56 02 71","70 03 01","70 04 03; 70 04 72","70 04 01","31 02 01","31 02 03","74 05 01","70 03 02","70 05 71","75 05 74","70 05 01","70 02 01; 70 02 71","51 02 01-05","74 04 01","37 02 05","70 07 01","70 04 02; 70 04 71"],"sr":["56 02 01","56 01 01","56 02 31"]},{"i":78,"a":"Строительно-монтажные работы","sp":"Геодезист","hi":["56 02 01","56 02 02","56 01 02","56 01 01","56 02 71","70 03 01","70 04 03; 70 04 72","70 04 01","31 02 01","31 02 03","74 05 01","70 03 02","70 05 71","75 05 74","70 05 01","70 02 01; 70 02 71","51 02 01-05","74 04 01","37 02 05","70 07 01","70 04 02; 70 04 71"],"sr":["56 02 01","56 01 01","56 02 31","70 04 03","37 02 34","74 05 01","70 02 01","70 03 31","70 02 71","70 04 02"]},{"i":79,"a":"Функции заказчика, инженерные услуги","sp":"Руководитель (управляющий) проекта","hi":["70 06 71","53","37 02 04","69 01 01","37 01 05","45 01","36 01","36 07 01","36 05 01","74 05 01","26 02 02-03","36 02; 42 01","94 01","48 01","08 01 01-05","08 01 01-03","39","51 02","74 04 01","70","37 02 05","95 02 04","95 02 07","46 01 02","95 01 13-01","95 01 13-03","27 01","25 01 07 13","95 02 03","43 01","36 03","74 06 05"],"sr":[]},{"i":80,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (общестроительные работы)","hi":["70 04 01","70 03 02","70 02 01; 70 02 71","08 01 01-05","74 04 01","70 07 01","95 01 13-01","70 02 02","70 03 01","69 01 01","74 05 01","70 01 01","37 02 05","27 01 01-17"],"sr":["70 02 01","70 02 71","69 01 01","37 02 34","70 01 01","70 03 31"]},{"i":81,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по монтажу технологических трубопроводов и оборудования)","hi":["36 20 04","70 05; 70 05 71","36 10 01","50","36 08","36 05","46 01 01","36 01","36 02; 42 01","36 20 01","43 01 08","49","36 06","36 12 01","36 09","70 01 01","43 01 05","70 02 01","08 01 01-01","08 01 01-04","70 04","36 11","70 07 01","43 01 04","43 01 07","74 06 01","74 06 02","46 01 02","47 02 01","36 20 03","36 20 02-03","36 07","48","43 01 01"],"sr":["70 04 03","36 10 01","50","36 08","46","36 05","36 01","36 02; 42 01","36 20","49","36 09","70 01 01","74 02 06","43 01 05","70 02 01","36 11","43 01 04","70 04 02","74 06 01","46 01 02","47 02 01","36 07","48","43 01 01","36 03"]},{"i":82,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по монтажу тепловых сетей, систем отопления, теплоснабжения вентиляционных установок, вентиляции и кондиционирования воздуха, водоснабжения и канализации, водостоков)","hi":["70 04 03; 70 04 72","43 01 05","70 02 01; 70 02 71","74 04 01","70 04 02; 70 04 71","43 01 71","74 06 05-02","70 04 01","43 01 78","74 05 01","43 01 08","70 07 01","43 01 04","43 01 07","27 01 01-04","70 02 02","43 01 77","43 01 06","43 01 75"],"sr":["70 04 03","43 01 05","70 02 01","70 04 31","70 02 71","70 04 02","74 05 01","43 01 04"]},{"i":83,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по монтажу систем холодоснабжения)","hi":["36 20 01","70 04 02"],"sr":["36 20 01"]},{"i":84,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по монтажу объектов газораспределительной системы, газопотребления)","hi":["70 05 71","70 05 01","70 05 74","43 01 05","70 04 02; 70 04 71","43 01 71","43 01 72","70 05 75"],"sr":["43 01 05","70 04 31","70 05 71","70 04 02"]},{"i":85,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по монтажу магистральных трубопроводов для транспортирования нефти, газа, нефтепродуктов)","hi":["70 05 71","70 05 01","51 02 02","70 05 74","70 04 02; 70 04 71","43 01 72","70 05 75"],"sr":["70 04 31","70 05 71","70 04 02"]},{"i":86,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по монтажу систем электроснабжения, автоматизации, связи и сигнализации, видеонаблюдения)","hi":["43 01 01","43 01 03","43 01 02","74 06 05-01","53 01 04","53 01 01","53 01 05","37 02 04","36 10 01-05","37 01 05","43 01 78","45 01 01","45 01 02","38 02 01","38 01 01","08 01 01-03","53 01 06","43 01 09","38 01 02 04","95 02 04","37 04 02","95 02 07","43 01 07","38 02 03","37 02 01","95 01 13-03","27 01 01-10","95 02 06","95 02 03","43 01 06","43 01 75"],"sr":["36 03 31","43 01 01","43 01 03","74 06 31","53 01 04","53 01 01","53 01 05","37 02 31","37 01 05","36 10 01","45 01","38 01 31","53 01 06","38 01 32","37 04 02-01 (01; 02; 03)","37 02 35","37 02 32","37 02 33","36 03"]},{"i":87,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по монтажу систем электроснабжения и автоматизации)","hi":["43 01 01","43 01 03","43 01 02","74 06 05-01","53 01 04","53 01 01","53 01 05","37 02 04","36 10 01-05","37 01 05","43 01 78","45 01 01","45 01 02","38 02 01","38 01 01","08 01 01-03","53 01 06","43 01 09","38 01 02 04","95 02 04","37 04 02","95 02 07","43 01 07","38 02 03","37 02 01","95 01 13-03","27 01 01-10","95 02 06","95 02 03","43 01 06","43 01 75"],"sr":["36 03 31","43 01 01","43 01 03","74 06 31","53 01 04","53 01 01","53 01 05","37 02 31","37 01 05","36 10 01","45 01","38 01 31","53 01 06","38 01 32","37 04 02-01 (01; 02; 03)","37 02 35","37 02 32","37 02 33","36 03"]},{"i":88,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по монтажу систем связи и сигнализации, видеонаблюдения)","hi":["95 02 10","53","37 02 04","31 04 04","36 10 01-05","37 01 05","43 01 78","94","55","45 01 02","45 01 01","31 03 04","40","98","41","31 04 08","31 03 08","54 01 02","38","31 03 07; 31 03 74","36 04 01","36 04 02","08 01 01-07","08 01 01-02","08 01 01-03","31 04 02","39","43 01 09","95 02 04","37 04 02","95 02 07","43 01 07","38 02 03","37 02 01","95 01 13-03","31 04 03","95 02 05","95 02 06","95 02 03","95 02 12","43 01 01","43 01 03","43 01 02","74 06 05-01","43 01 06","43 01 75"],"sr":["53","37 02 31","40","37 01 05","36 10 01","45 01","41","36 03 31","94 01 01","38","39","36 04","37 04 02","37 02 32","43 01 01","37 02 33","43 01 03","74 06 31"]},{"i":89,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по устройству дорог и аэродромов, мостовых сооружений и труб)","hi":["70 03 01","70 03 02","95 01 13-01","70 04 01","46 01 01-02","74 05 01","44 01 02","70 02 01; 70 02 71","08 01 01-05","74 04 01","37 02 05","70 07 01","27 01 01-03"],"sr":["70 03 31","37 02 34","74 05 01","70 02 01","70 02 71"]},{"i":90,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по благоустройству территории)","hi":["70 03 01","69 01 01","69 01 02","70 04 01","75 01 01","46 01 01-02","74 05 01","70 03 02","44 01 02","70 01 01","70 02 01; 70 02 71","08 01 01-05","75 02 01","74 04 01","37 02 05","70 07 01","95 01 13-01","27 01 01-03","70 02 02"],"sr":["69 01 01","37 02 34","75 01 01; 75 01 71","74 05 01","70 01 01","70 02 01","75 02 01","70 03 31","70 02 71"]},{"i":91,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по строительству гидротехнических сооружений, мелиоративных систем и сооружений)","hi":["70 04 01","74 05 01","70 02 01; 70 02 71","08 01 01-05","74 04 01","70 07 01"],"sr":["74 05 01","70 02 01","70 02 71"]},{"i":92,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (строительство железных дорог и мостовых сооружений на железных дорогах)","hi":["37 02 05","95 01 13-01","70 03 01","70 04 01","70 03 02","70 02 01; 70 02 71","08 01 01-05","74 04 01","70 07 01","27 01 01-05"],"sr":["37 02 34","70 02 01","70 03 31","70 02 71"]},{"i":93,"a":"Функции заказчика, инженерные услуги","sp":"Инженер по техническому надзору (работы по устройству тоннелей и метрополитенов)","hi":["70 03 02","70 02 01; 70 02 71","51 02 01","37 02 05"],"sr":[]}]};
