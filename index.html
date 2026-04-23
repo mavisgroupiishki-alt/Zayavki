@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Генератор заявок — Мавис Групп</title>
+<title>MG Tools v3 — Мавис Групп</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -411,24 +411,26 @@ let docState={
 };
 
 function renderDoc(){
+  console.log('[MG Tools v3] renderDoc called, cvStatus=',docState.cvStatus);
   const el=document.getElementById('scanApp');
   const D=docState;
-  // Auto-start opencv load
-  if(D.cvStatus==='idle'){
-    D.cvStatus='loading';
-    loadOpenCV().then(()=>{D.cvStatus='ready';renderDoc()}).catch(e=>{D.cvStatus='error';D.lastError=e.message||'не удалось';renderDoc()});
-  }
+  // NB: OpenCV загружается вручную кнопкой, чтобы не блокировать UI при открытии вкладки
   if(D.files.length===0){
     el.innerHTML=`
     <div class="card">
       <div class="card-title">🔍 Улучшатель документов</div>
       <div class="card-sub">Обработка сканов и фото дипломов и трудовых книжек: выравнивание, обрезка, удаление фона, повышение читаемости.</div>
-      ${D.cvStatus==='loading'?`<div style="margin-top:10px;padding:10px 12px;background:#eef2ff;border-radius:6px;font-size:13px;color:#4338ca">
-        <div style="font-weight:600;margin-bottom:4px">⏳ Загрузка движка обработки (~9 МБ)</div>
-        <div style="font-size:12px;font-family:monospace;color:#6366f1">${E(window.cvLoadStatus||'инициализация...')}</div>
-        <div style="font-size:11px;color:#888;margin-top:6px">Если висит >1 минуты — откройте F12 → Console и пришлите скриншот</div>
+      ${D.cvStatus==='idle'?`<div style="margin-top:12px;padding:10px 12px;background:#fef3c7;border-radius:6px;font-size:13px;color:#92400e">
+        <div style="font-weight:600;margin-bottom:4px">⚠️ Движок обработки не загружен</div>
+        <div style="font-size:12px;color:#78350f;margin-bottom:8px">Для работы нужна библиотека OpenCV (~10 МБ). На медленном интернете может грузиться 30–60 секунд — в это время страница будет подтормаживать.</div>
+        <button onclick="docStartLoad()" style="padding:8px 14px;background:#92400e;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-family:inherit;font-size:13px">▶ Загрузить движок</button>
       </div>`:''}
-      ${D.cvStatus==='error'?`<div style="margin-top:10px;padding:8px 12px;background:#fef2f2;border-radius:6px;font-size:13px;color:#991b1b">⚠️ Ошибка загрузки движка: ${E(D.lastError)}. Проверьте интернет и перезагрузите страницу.</div>`:''}
+      ${D.cvStatus==='loading'?`<div style="margin-top:10px;padding:10px 12px;background:#eef2ff;border-radius:6px;font-size:13px;color:#4338ca">
+        <div style="font-weight:600;margin-bottom:4px">⏳ Загрузка движка обработки</div>
+        <div style="font-size:12px;font-family:monospace;color:#6366f1">${E(window.cvLoadStatus||'инициализация...')}</div>
+        <div style="font-size:11px;color:#888;margin-top:6px">Не закрывайте вкладку. Страница может временно подтормаживать — это нормально.</div>
+      </div>`:''}
+      ${D.cvStatus==='error'?`<div style="margin-top:10px;padding:8px 12px;background:#fef2f2;border-radius:6px;font-size:13px;color:#991b1b">⚠️ Ошибка загрузки: ${E(D.lastError)}<br><button onclick="docStartLoad()" style="margin-top:6px;padding:6px 12px;background:#991b1b;color:#fff;border:none;border-radius:5px;cursor:pointer;font-family:inherit;font-size:12px">↻ Попробовать снова</button></div>`:''}
       ${D.cvStatus==='ready'?'<div style="margin-top:10px;padding:8px 12px;background:#f0fdf4;border-radius:6px;font-size:13px;color:#166534">✓ Движок обработки готов</div>':''}
     </div>
     <div class="card">
@@ -531,6 +533,15 @@ function docReset(){docState.files=[];docState.currentFile=0;docState.currentPag
 function docSwitchFile(i){docState.currentFile=i;docState.currentPage=0;renderDoc()}
 function docSwitchPage(i){docState.currentPage=i;renderDoc()}
 function docCountUnprocessed(){let n=0;for(const f of docState.files)for(const p of f.pages)if(!p.processedCanvas)n++;return n}
+
+function docStartLoad(){
+  docState.cvStatus='loading';
+  docState.lastError='';
+  renderDoc();
+  loadOpenCV()
+    .then(()=>{docState.cvStatus='ready';renderDoc()})
+    .catch(e=>{docState.cvStatus='error';docState.lastError=e.message||'не удалось';renderDoc()});
+}
 
 async function docLoadFiles(fileList){
   if(!fileList||fileList.length===0)return;
@@ -1023,12 +1034,7 @@ function docEnhanceAggressive(cv,img){
   return out;
 }
 
-// Hook into switchModule
-const _origSwitchModule=window.switchModule;
-window.switchModule=function(mod){
-  _origSwitchModule(mod);
-  if(mod==='scan')renderDoc();
-};
+// NB: switchModule уже вызывает renderDoc для 'scan' (см. функцию switchModule выше)
 
 
 // ===================== DIPLOM ANALYZER (Постановление №70) =====================
