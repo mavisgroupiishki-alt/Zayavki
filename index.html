@@ -78,73 +78,85 @@ function loadOpenCV(){
   if(window.cv && window.cv.Mat)return Promise.resolve(window.cv);
   if(window._cvLoading)return window._cvLoading;
 
-  // CDN list, ordered by speed (fastest first). Fallback on failure/timeout.
+  // Multiple CDNs: try each in parallel-fallback. First successful wins.
+  // Using <script> tag (browser caching, native loading)
   const CDNs=[
     'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js',
     'https://unpkg.com/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js',
+    'https://cdn.jsdelivr.net/gh/opencv/opencv@4.10.0/platforms/js/opencv.js',
     'https://docs.opencv.org/4.8.0/opencv.js'
   ];
 
-  function tryLoad(url,timeout){
+  window.cvLoadStatus='Запуск загрузки...';
+  function setStatus(msg){
+    window.cvLoadStatus=msg;
+    console.log('[OpenCV]',msg);
+    if(typeof renderDoc==='function' && document.getElementById('scanApp'))renderDoc();
+  }
+
+  function tryLoadScript(url,timeoutMs){
     return new Promise((resolve,reject)=>{
-      // Try fetch first with progress
-      const xhr=new XMLHttpRequest();
-      xhr.open('GET',url,true);
-      xhr.responseType='blob';
-      let tmr=setTimeout(()=>{xhr.abort();reject(new Error('timeout '+url))},timeout);
-      xhr.onprogress=(e)=>{
-        if(e.lengthComputable){
-          window.cvLoadProgress=Math.round(e.loaded/e.total*100);
-          // Update UI if visible
-          if(typeof renderDoc==='function' && document.getElementById('scanApp') && !document.getElementById('docFi'))renderDoc();
-        }
-      };
-      xhr.onload=()=>{
-        clearTimeout(tmr);
-        if(xhr.status>=200 && xhr.status<300){
-          const blob=xhr.response;
-          const blobUrl=URL.createObjectURL(blob);
-          const s=document.createElement('script');
-          s.src=blobUrl;
-          s.async=true;
-          s.onload=()=>{
-            const check=()=>{
-              if(window.cv && window.cv.Mat){window.cvReady=true;URL.revokeObjectURL(blobUrl);resolve(window.cv)}
-              else if(window.cv && window.cv.onRuntimeInitialized!==undefined){
-                window.cv.onRuntimeInitialized=()=>{window.cvReady=true;URL.revokeObjectURL(blobUrl);resolve(window.cv)};
-              } else setTimeout(check,100);
+      setStatus('Пробую: '+url.replace(/^https:\/\//,''));
+      const s=document.createElement('script');
+      s.src=url;
+      s.async=true;
+      let done=false;
+      const tmr=setTimeout(()=>{
+        if(!done){done=true;setStatus('Таймаут на '+url.split('/')[2]);reject(new Error('timeout'))}
+      },timeoutMs);
+      s.onload=()=>{
+        if(done)return;
+        setStatus('Скрипт загружен с '+url.split('/')[2]+', инициализация...');
+        const check=(tries)=>{
+          if(window.cv && window.cv.Mat){
+            done=true;clearTimeout(tmr);
+            window.cvReady=true;
+            setStatus('✓ Готово');
+            resolve(window.cv);
+          } else if(window.cv && typeof window.cv.then==='function'){
+            // newer opencv-js exports a Promise
+            window.cv.then(()=>{
+              done=true;clearTimeout(tmr);
+              window.cvReady=true;
+              setStatus('✓ Готово');
+              resolve(window.cv);
+            }).catch(e=>{done=true;clearTimeout(tmr);reject(e)});
+          } else if(window.cv && 'onRuntimeInitialized' in window.cv){
+            window.cv.onRuntimeInitialized=()=>{
+              done=true;clearTimeout(tmr);
+              window.cvReady=true;
+              setStatus('✓ Готово');
+              resolve(window.cv);
             };
-            check();
-          };
-          s.onerror=(e)=>{URL.revokeObjectURL(blobUrl);reject(new Error('script error'))};
-          document.head.appendChild(s);
-        } else {
-          reject(new Error('HTTP '+xhr.status));
-        }
+          } else if(tries<200){
+            setTimeout(()=>check(tries+1),100);
+          } else {
+            done=true;clearTimeout(tmr);reject(new Error('cv не инициализировался'));
+          }
+        };
+        check(0);
       };
-      xhr.onerror=()=>{clearTimeout(tmr);reject(new Error('network error'))};
-      xhr.ontimeout=()=>reject(new Error('timeout'));
-      xhr.send();
+      s.onerror=()=>{
+        if(done)return;
+        done=true;clearTimeout(tmr);
+        setStatus('Ошибка загрузки с '+url.split('/')[2]);
+        reject(new Error('script load error'));
+      };
+      document.head.appendChild(s);
     });
   }
 
   window._cvLoading=(async ()=>{
     let lastErr=null;
-    for(let i=0;i<CDNs.length;i++){
-      const url=CDNs[i];
-      console.log('[OpenCV] trying',url);
-      window.cvLoadProgress=0;
+    for(const url of CDNs){
       try{
-        // 30s timeout per CDN
-        const cv=await tryLoad(url,30000);
-        console.log('[OpenCV] loaded from',url);
-        return cv;
+        return await tryLoadScript(url,45000);
       }catch(e){
-        console.warn('[OpenCV] CDN failed:',url,e.message);
         lastErr=e;
       }
     }
-    throw lastErr||new Error('All CDNs failed');
+    setStatus('❌ Все CDN недоступны: '+(lastErr?.message||'неизвестная ошибка'));
+    throw lastErr||new Error('все CDN недоступны');
   })();
   return window._cvLoading;
 }
@@ -409,8 +421,9 @@ function renderDoc(){
       <div class="card-title">🔍 Улучшатель документов</div>
       <div class="card-sub">Обработка сканов и фото дипломов и трудовых книжек: выравнивание, обрезка, удаление фона, повышение читаемости.</div>
       ${D.cvStatus==='loading'?`<div style="margin-top:10px;padding:10px 12px;background:#eef2ff;border-radius:6px;font-size:13px;color:#4338ca">
-        <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>⏳ Загружается движок обработки (~9 МБ, только при первом запуске)</span><b>${window.cvLoadProgress||0}%</b></div>
-        <div style="height:6px;background:#ddd6fe;border-radius:3px;overflow:hidden"><div style="height:100%;width:${window.cvLoadProgress||0}%;background:#4338ca;transition:width .3s"></div></div>
+        <div style="font-weight:600;margin-bottom:4px">⏳ Загрузка движка обработки (~9 МБ)</div>
+        <div style="font-size:12px;font-family:monospace;color:#6366f1">${E(window.cvLoadStatus||'инициализация...')}</div>
+        <div style="font-size:11px;color:#888;margin-top:6px">Если висит >1 минуты — откройте F12 → Console и пришлите скриншот</div>
       </div>`:''}
       ${D.cvStatus==='error'?`<div style="margin-top:10px;padding:8px 12px;background:#fef2f2;border-radius:6px;font-size:13px;color:#991b1b">⚠️ Ошибка загрузки движка: ${E(D.lastError)}. Проверьте интернет и перезагрузите страницу.</div>`:''}
       ${D.cvStatus==='ready'?'<div style="margin-top:10px;padding:8px 12px;background:#f0fdf4;border-radius:6px;font-size:13px;color:#166534">✓ Движок обработки готов</div>':''}
