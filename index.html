@@ -81,6 +81,7 @@ function loadOpenCV(){
   // Multiple CDNs: try each in parallel-fallback. First successful wins.
   // Using <script> tag (browser caching, native loading)
   const CDNs=[
+    'opencv.js',  // LOCAL FILE (place next to index.html for offline/blocked networks)
     'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js',
     'https://unpkg.com/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js',
     'https://cdn.jsdelivr.net/gh/opencv/opencv@4.10.0/platforms/js/opencv.js',
@@ -150,13 +151,15 @@ function loadOpenCV(){
     let lastErr=null;
     for(const url of CDNs){
       try{
-        return await tryLoadScript(url,45000);
+        // Local file: shorter timeout (10s). CDN: 45s.
+        const timeout=url.startsWith('http')?45000:10000;
+        return await tryLoadScript(url,timeout);
       }catch(e){
         lastErr=e;
       }
     }
-    setStatus('❌ Все CDN недоступны: '+(lastErr?.message||'неизвестная ошибка'));
-    throw lastErr||new Error('все CDN недоступны');
+    setStatus('❌ Все источники недоступны: '+(lastErr?.message||'неизвестная ошибка'));
+    throw lastErr||new Error('все источники недоступны');
   })();
   return window._cvLoading;
 }
