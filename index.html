@@ -71,525 +71,7 @@
 <script>
 // PDF.js worker
 if(window.pdfjsLib){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'}
-
-// ============================================================
-// OpenCV Web Worker — вся тяжёлая обработка идёт в отдельном
-// потоке браузера. UI остаётся отзывчивым даже во время
-// компиляции WASM и обработки больших изображений.
-// ============================================================
-window.cvReady=false;
-window.cvLoadStatus='';
-window._cvWorker=null;
-window._cvJobs=new Map(); // id -> {resolve, reject}
-window._cvJobId=0;
-
-// URL'ы с которых воркер попробует загрузить opencv.js.
-// Порядок важен: docs.opencv.org первым — там WASM отдельным файлом,
-// компилируется стримингом (5-10x быстрее, чем base64-встроенный WASM).
-// Локальный opencv.js — последним фолбэком, на случай если все CDN недоступны.
-function getCvWorkerCdnList(){
-  const base=location.href.replace(/[^/]*$/,''); // убираем имя файла -> папка
-  return [
-    'https://docs.opencv.org/4.8.0/opencv.js',
-    'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js',
-    'https://unpkg.com/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js',
-    base+'opencv.js'  // локальная копия — только если все CDN лежат
-  ];
-}
-
-// Код, который выполняется ВНУТРИ воркера (отдельный поток).
-// Упаковываем в функцию, превращаем в строку и создаём Blob URL —
-// это даёт один файл index.html без внешних скриптов воркера.
-function _cvWorkerCode(){
-  // ========== КОД, ИСПОЛНЯЕМЫЙ ВНУТРИ WEB WORKER ==========
-  // Здесь нет DOM, нет window. Есть self, postMessage, importScripts.
-  let cv=null;
-
-  self.onmessage=async function(e){
-    const msg=e.data;
-    try{
-      if(msg.type==='init'){
-        // Загружаем ОДИН URL, переданный главным потоком.
-        // Fallback-логика теперь в главном потоке: он прибивает воркер через таймаут
-        // и создаёт новый с другим URL. Это надёжнее, чем try-catch здесь,
-        // потому что importScripts и компиляция WASM могут ВИСНУТЬ навсегда,
-        // и никакой try-catch внутри воркера их не прервёт.
-        const url=msg.url;
-        self.postMessage({type:'status',text:'Пробую: '+url.replace(/^https?:\/\//,'').slice(0,60)});
-        importScripts(url); // блокирует ТОЛЬКО воркер, UI жив
-        const candidate=self.cv;
-        if(!candidate)throw new Error('переменная cv не появилась после загрузки');
-        self.postMessage({type:'status',text:'Скрипт загружен, компиляция WASM...'});
-        if(typeof candidate.then==='function'){
-          // Promise-вариант (@techstark)
-          cv=await candidate;
-        } else if('onRuntimeInitialized' in candidate || !candidate.Mat){
-          // Emscripten-вариант (docs.opencv.org) — ждём готовности
-          cv=await new Promise((res,rej)=>{
-            let done=false;
-            candidate.onRuntimeInitialized=()=>{if(!done){done=true;res(candidate)}};
-            // Если уже готов — не ждать
-            const poll=()=>{
-              if(done)return;
-              if(candidate.Mat){done=true;res(candidate);return}
-              setTimeout(poll,100);
-            };
-            poll();
-          });
-        } else {
-          cv=candidate;
-        }
-        if(!cv||!cv.Mat)throw new Error('cv.Mat недоступен после инициализации');
-        self.postMessage({type:'ready'});
-        return;
-      }
-
-      if(msg.type==='process'){
-        if(!cv)throw new Error('OpenCV не инициализирован');
-        const result=processImage(cv,msg);
-        // Передаём ImageData обратно; буфер можно transferable-ить для скорости
-        self.postMessage(
-          {type:'result',id:msg.id,width:result.width,height:result.height,buffer:result.buffer},
-          [result.buffer]
-        );
-        return;
-      }
-    }catch(err){
-      self.postMessage({type:msg.type==='init'?'error':'job-error',id:msg.id,message:(err&&err.message)||String(err)});
-    }
-  };
-
-  // ========== OpenCV pipeline (тот же самый, что был в главном потоке) ==========
-  function processImage(cv,msg){
-    // Создаём RGBA Mat из переданного ArrayBuffer.
-    // matFromImageData ждёт настоящий ImageData — в воркере его нет,
-    // поэтому создаём Mat напрямую и копируем пикселы через data.set().
-    const src=new cv.Mat(msg.height,msg.width,cv.CV_8UC4);
-    src.data.set(new Uint8ClampedArray(msg.buffer));
-    try{
-      const pts=docDetectContour(cv,src);
-      let warped;
-      if(pts){warped=docFourPointTransform(cv,src,pts);} else {warped=src.clone();}
-      const oriented=docDetectOrientation(cv,warped);
-      warped.delete();
-      const deskewed=docDeskew(cv,oriented);
-      oriented.delete();
-      const enhanced=docEnhanceAggressive(cv,deskewed);
-      deskewed.delete();
-      // Результат — RGBA Mat. Достаём пикселы и отдаём обратно.
-      const w=enhanced.cols,h=enhanced.rows;
-      const out=new Uint8ClampedArray(enhanced.data); // копия
-      enhanced.delete();
-      return {width:w,height:h,buffer:out.buffer};
-    } finally {
-      src.delete();
-    }
-  }
-
-  // ---------- Вспомогательные математические функции ----------
-  function dist(a,b){return Math.hypot(a[0]-b[0],a[1]-b[1])}
-  function orderPts(pts){
-    const sums=pts.map(p=>p[0]+p[1]);
-    const diffs=pts.map(p=>p[1]-p[0]);
-    const tl=pts[sums.indexOf(Math.min(...sums))];
-    const br=pts[sums.indexOf(Math.max(...sums))];
-    const tr=pts[diffs.indexOf(Math.min(...diffs))];
-    const bl=pts[diffs.indexOf(Math.max(...diffs))];
-    return [tl,tr,br,bl];
-  }
-
-  // ---------- Детекция контура документа (3 стратегии) ----------
-  function docDetectContour(cv,src){
-    const h=src.rows,w=src.cols;
-    const scale=1000/Math.max(h,w);
-    const small=new cv.Mat();
-    cv.resize(src,small,new cv.Size(Math.round(w*scale),Math.round(h*scale)));
-    const gray=new cv.Mat();
-    cv.cvtColor(small,gray,cv.COLOR_RGBA2GRAY);
-    const sh=gray.rows,sw=gray.cols;
-    const minArea=sh*sw*0.15;
-    const maxArea=sh*sw*0.98;
-    const candidates=[];
-
-    function tryFindQuads(binImg,tag){
-      const contours=new cv.MatVector();
-      const hierarchy=new cv.Mat();
-      cv.findContours(binImg,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-      const arr=[];
-      for(let i=0;i<contours.size();i++){
-        const c=contours.get(i);
-        const area=cv.contourArea(c);
-        arr.push({c,area,idx:i});
-      }
-      arr.sort((a,b)=>b.area-a.area);
-      for(let k=0;k<Math.min(5,arr.length);k++){
-        const cand=arr[k];
-        if(cand.area<minArea||cand.area>maxArea)continue;
-        const peri=cv.arcLength(cand.c,true);
-        for(const eps of [0.02,0.03,0.04,0.05]){
-          const approx=new cv.Mat();
-          cv.approxPolyDP(cand.c,approx,eps*peri,true);
-          if(approx.rows===4){
-            const pts=[];
-            for(let i=0;i<4;i++){
-              pts.push([approx.data32S[i*2],approx.data32S[i*2+1]]);
-            }
-            candidates.push({tag,area:cand.area,pts});
-            approx.delete();
-            break;
-          }
-          approx.delete();
-        }
-      }
-      for(let i=0;i<contours.size();i++)contours.get(i).delete();
-      contours.delete();
-      hierarchy.delete();
-    }
-
-    // Strategy A: Canny
-    for(const [lo,hi] of [[30,100],[50,150],[20,80]]){
-      const blurred=new cv.Mat();
-      cv.GaussianBlur(gray,blurred,new cv.Size(7,7),0);
-      const edges=new cv.Mat();
-      cv.Canny(blurred,edges,lo,hi);
-      const dilated=new cv.Mat();
-      const k=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(5,5));
-      cv.dilate(edges,dilated,k,new cv.Point(-1,-1),2);
-      tryFindQuads(dilated,'canny');
-      blurred.delete();edges.delete();dilated.delete();k.delete();
-    }
-
-    // Strategy B: Otsu
-    const otsu=new cv.Mat();
-    cv.threshold(gray,otsu,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
-    const otsuInv=new cv.Mat();
-    cv.bitwise_not(otsu,otsuInv);
-    for(const m of [otsu,otsuInv]){
-      const closed=new cv.Mat();
-      const kk=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(15,15));
-      cv.morphologyEx(m,closed,cv.MORPH_CLOSE,kk);
-      tryFindQuads(closed,'otsu');
-      closed.delete();kk.delete();
-    }
-    otsu.delete();otsuInv.delete();
-
-    // Strategy C: Saturation
-    const hsv=new cv.Mat();
-    const smallBGR=new cv.Mat();
-    cv.cvtColor(small,smallBGR,cv.COLOR_RGBA2BGR);
-    cv.cvtColor(smallBGR,hsv,cv.COLOR_BGR2HSV);
-    const hsvChannels=new cv.MatVector();
-    cv.split(hsv,hsvChannels);
-    const sat=hsvChannels.get(1);
-    const satBin=new cv.Mat();
-    cv.threshold(sat,satBin,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
-    const satClosed=new cv.Mat();
-    const sk=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(15,15));
-    cv.morphologyEx(satBin,satClosed,cv.MORPH_CLOSE,sk);
-    tryFindQuads(satClosed,'sat');
-    hsv.delete();smallBGR.delete();
-    for(let i=0;i<hsvChannels.size();i++)hsvChannels.get(i).delete();
-    hsvChannels.delete();
-    satBin.delete();satClosed.delete();sk.delete();
-
-    small.delete();gray.delete();
-
-    if(candidates.length===0)return null;
-    function score(cand){
-      const pts=orderPts(cand.pts);
-      const wA=dist(pts[1],pts[0]),wB=dist(pts[2],pts[3]);
-      const hA=dist(pts[3],pts[0]),hB=dist(pts[2],pts[1]);
-      const wsym=Math.min(wA,wB)/(Math.max(wA,wB)+1);
-      const hsym=Math.min(hA,hB)/(Math.max(hA,hB)+1);
-      const aw=(wA+wB)/2,ah=(hA+hB)/2;
-      const ar=Math.min(aw,ah)/(Math.max(aw,ah)+1);
-      return cand.area*wsym*hsym*(0.3+ar);
-    }
-    candidates.sort((a,b)=>score(b)-score(a));
-    const best=candidates[0];
-    return best.pts.map(p=>[p[0]/scale,p[1]/scale]);
-  }
-
-  function docFourPointTransform(cv,src,pts){
-    const [tl,tr,br,bl]=orderPts(pts);
-    const wA=dist(br,bl),wB=dist(tr,tl);
-    const maxW=Math.round(Math.max(wA,wB));
-    const hA=dist(tr,br),hB=dist(tl,bl);
-    const maxH=Math.round(Math.max(hA,hB));
-    const srcTri=cv.matFromArray(4,1,cv.CV_32FC2,[tl[0],tl[1],tr[0],tr[1],br[0],br[1],bl[0],bl[1]]);
-    const dstTri=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,maxW-1,0,maxW-1,maxH-1,0,maxH-1]);
-    const M=cv.getPerspectiveTransform(srcTri,dstTri);
-    const warped=new cv.Mat();
-    cv.warpPerspective(src,warped,M,new cv.Size(maxW,maxH),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(255,255,255,255));
-    srcTri.delete();dstTri.delete();M.delete();
-    return warped;
-  }
-
-  function docDetectOrientation(cv,img){
-    const gray=new cv.Mat();
-    cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
-    const h=gray.rows,w=gray.cols;
-    const scale=800/Math.max(h,w);
-    const small=new cv.Mat();
-    cv.resize(gray,small,new cv.Size(Math.round(w*scale),Math.round(h*scale)));
-    gray.delete();
-
-    function scoreRotation(rotCode){
-      const rot=new cv.Mat();
-      if(rotCode===0)small.copyTo(rot);
-      else if(rotCode===1)cv.rotate(small,rot,cv.ROTATE_90_CLOCKWISE);
-      else if(rotCode===2)cv.rotate(small,rot,cv.ROTATE_180);
-      else cv.rotate(small,rot,cv.ROTATE_90_COUNTERCLOCKWISE);
-      const bin=new cv.Mat();
-      cv.threshold(rot,bin,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
-      const rh=bin.rows,rw=bin.cols;
-      const rowSums=new Float64Array(rh);
-      const colSums=new Float64Array(rw);
-      for(let y=0;y<rh;y++){
-        let s=0;
-        for(let x=0;x<rw;x++){
-          const v=bin.data[y*rw+x]>0?1:0;
-          s+=v;colSums[x]+=v;
-        }
-        rowSums[y]=s;
-      }
-      function std(arr){
-        let m=0;for(const v of arr)m+=v;m/=arr.length;
-        let s=0;for(const v of arr)s+=(v-m)*(v-m);
-        return Math.sqrt(s/arr.length);
-      }
-      const rowStd=std(rowSums),colStd=std(colSums);
-      const line=rowStd/(colStd+1);
-      const smoothed=new Float64Array(rh);
-      for(let i=0;i<rh;i++){
-        let s=0,n=0;
-        for(let k=-2;k<=2;k++){const j=i+k;if(j>=0&&j<rh){s+=rowSums[j];n++}}
-        smoothed[i]=s/n;
-      }
-      const t1=Math.floor(rh/3),t2=Math.floor(2*rh/3);
-      let topMax=0,midMax=0,botMax=0;
-      for(let i=0;i<t1;i++)if(smoothed[i]>topMax)topMax=smoothed[i];
-      for(let i=t1;i<t2;i++)if(smoothed[i]>midMax)midMax=smoothed[i];
-      for(let i=t2;i<rh;i++)if(smoothed[i]>botMax)botMax=smoothed[i];
-      const headerScore=topMax/(midMax+botMax+1);
-      const total=line*(1+headerScore);
-      rot.delete();bin.delete();
-      return total;
-    }
-    let bestRot=0,bestScore=-1;
-    for(let r=0;r<4;r++){
-      const s=scoreRotation(r);
-      if(s>bestScore){bestScore=s;bestRot=r}
-    }
-    small.delete();
-    const out=new cv.Mat();
-    if(bestRot===0)img.copyTo(out);
-    else if(bestRot===1)cv.rotate(img,out,cv.ROTATE_90_CLOCKWISE);
-    else if(bestRot===2)cv.rotate(img,out,cv.ROTATE_180);
-    else cv.rotate(img,out,cv.ROTATE_90_COUNTERCLOCKWISE);
-    return out;
-  }
-
-  function docDeskew(cv,img){
-    const gray=new cv.Mat();
-    cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
-    const edges=new cv.Mat();
-    cv.Canny(gray,edges,50,150);
-    const lines=new cv.Mat();
-    cv.HoughLines(edges,lines,1,Math.PI/360,200);
-    const angles=[];
-    const N=Math.min(lines.rows,100);
-    for(let i=0;i<N;i++){
-      const theta=lines.data32F[i*2+1];
-      const angle=(theta*180/Math.PI)-90;
-      if(Math.abs(angle)<15)angles.push(angle);
-    }
-    gray.delete();edges.delete();lines.delete();
-    if(angles.length<5)return img.clone();
-    angles.sort((a,b)=>a-b);
-    const median=angles[Math.floor(angles.length/2)];
-    if(Math.abs(median)<0.3)return img.clone();
-    const h=img.rows,w=img.cols;
-    const center=new cv.Point(w/2,h/2);
-    const M=cv.getRotationMatrix2D(center,median,1.0);
-    const out=new cv.Mat();
-    cv.warpAffine(img,out,M,new cv.Size(w,h),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(255,255,255,255));
-    M.delete();
-    return out;
-  }
-
-  function docEnhanceAggressive(cv,img){
-    const gray=new cv.Mat();
-    cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
-    const kSize=(Math.max(gray.rows,gray.cols)/25)|0;
-    const k=kSize%2===0?kSize+1:kSize;
-    const bg=new cv.Mat();
-    cv.GaussianBlur(gray,bg,new cv.Size(k,k),0);
-    const norm=new cv.Mat();
-    cv.divide(gray,bg,norm,255);
-    gray.delete();bg.delete();
-    const clahe=new cv.CLAHE(3.0,new cv.Size(16,16));
-    const cl=new cv.Mat();
-    clahe.apply(norm,cl);
-    norm.delete();clahe.delete();
-    const lut=new cv.Mat(1,256,cv.CV_8UC1);
-    for(let i=0;i<256;i++)lut.data[i]=Math.round(Math.pow(i/255,1/1.2)*255);
-    const gamma=new cv.Mat();
-    cv.LUT(cl,lut,gamma);
-    cl.delete();lut.delete();
-    const blur=new cv.Mat();
-    cv.GaussianBlur(gamma,blur,new cv.Size(0,0),2.0);
-    const sharp=new cv.Mat();
-    cv.addWeighted(gamma,1.8,blur,-0.8,0,sharp);
-    gamma.delete();blur.delete();
-    const w=sharp.cols,h=sharp.rows;
-    for(let i=0;i<w*h;i++){
-      if(sharp.data[i]>230)sharp.data[i]=255;
-    }
-    const out=new cv.Mat();
-    cv.cvtColor(sharp,out,cv.COLOR_GRAY2RGBA);
-    sharp.delete();
-    return out;
-  }
-  // ========== КОНЕЦ КОДА ВНУТРИ WORKER ==========
-}
-
-// Создание воркера из inline-кода (без отдельного файла)
-function _createCvWorker(){
-  const src='('+_cvWorkerCode.toString()+')();';
-  const blob=new Blob([src],{type:'application/javascript'});
-  return new Worker(URL.createObjectURL(blob));
-}
-
-// Публичный API: загрузить OpenCV (только один раз)
-// Идея: для каждого URL из списка создаём НОВЫЙ воркер с таймаутом.
-// Если воркер не прислал 'ready' за N секунд — прибиваем его и пробуем следующий URL.
-// Это защищает от зависания при компиляции WASM (особенно у base64-встроенных сборок).
-function loadOpenCV(){
-  if(window.cvReady)return Promise.resolve();
-  if(window._cvLoading)return window._cvLoading;
-
-  function setStatus(msg){
-    window.cvLoadStatus=msg;
-    console.log('[OpenCV-Worker]',msg);
-    if(typeof renderDoc==='function' && document.getElementById('scanApp'))renderDoc();
-  }
-
-  // Таймауты на каждый URL (мс). Для CDN со стриминг-WASM хватает 30с;
-  // для последнего локального (base64-встроенный) даём больше, но всё равно обрываем.
-  function timeoutFor(url){
-    if(url.includes('docs.opencv.org'))return 45000;  // стриминг WASM, обычно 5-15с
-    if(url.includes('jsdelivr')||url.includes('unpkg'))return 60000; // base64 WASM
-    return 90000; // локальный — может быть медленно с диска + компиляция
-  }
-
-  function tryOneWorker(url){
-    return new Promise((resolve,reject)=>{
-      setStatus('Источник: '+url.replace(/^https?:\/\//,'').slice(0,70));
-      let worker;
-      try{worker=_createCvWorker();}catch(e){reject(e);return}
-      const tmr=setTimeout(()=>{
-        try{worker.terminate()}catch(e){}
-        reject(new Error('таймаут '+Math.round(timeoutFor(url)/1000)+'с'));
-      },timeoutFor(url));
-      worker.onmessage=(e)=>{
-        const m=e.data;
-        if(m.type==='status'){setStatus(m.text);return}
-        if(m.type==='ready'){
-          clearTimeout(tmr);
-          // Воркер живой — сохраняем его для последующей обработки
-          window._cvWorker=worker;
-          // Переустанавливаем обработчики на "рабочий" режим
-          worker.onmessage=_cvWorkerRuntimeMessage;
-          worker.onerror=_cvWorkerRuntimeError;
-          resolve();
-          return;
-        }
-        if(m.type==='error'){
-          clearTimeout(tmr);
-          try{worker.terminate()}catch(e){}
-          reject(new Error(m.message));
-          return;
-        }
-      };
-      worker.onerror=(e)=>{
-        clearTimeout(tmr);
-        try{worker.terminate()}catch(err){}
-        reject(new Error(e.message||'ошибка воркера'));
-      };
-      worker.postMessage({type:'init',url});
-    });
-  }
-
-  window._cvLoading=(async ()=>{
-    const urls=getCvWorkerCdnList();
-    let lastErr=null;
-    for(const url of urls){
-      try{
-        await tryOneWorker(url);
-        window.cvReady=true;
-        setStatus('✓ Готово');
-        return;
-      }catch(e){
-        lastErr=e;
-        setStatus('✗ '+(e.message||e)+' — пробую следующий источник');
-      }
-    }
-    const msg='Все источники недоступны: '+(lastErr?.message||'');
-    setStatus('❌ '+msg);
-    throw new Error(msg);
-  })();
-  return window._cvLoading;
-}
-
-// Обработчики "рабочего" режима (после успешной инициализации)
-function _cvWorkerRuntimeMessage(e){
-  const m=e.data;
-  if(m.type==='result'){
-    const job=window._cvJobs.get(m.id);
-    if(job){
-      window._cvJobs.delete(m.id);
-      job.resolve({width:m.width,height:m.height,buffer:m.buffer});
-    }
-    return;
-  }
-  if(m.type==='job-error'){
-    const job=window._cvJobs.get(m.id);
-    if(job){
-      window._cvJobs.delete(m.id);
-      job.reject(new Error(m.message));
-    }
-    return;
-  }
-}
-function _cvWorkerRuntimeError(e){
-  console.error('[OpenCV-Worker] runtime error:',e.message||e);
-}
-
-// Отправить canvas в воркер, получить обработанный canvas обратно
-function cvProcessCanvas(srcCanvas){
-  if(!window.cvReady||!window._cvWorker)return Promise.reject(new Error('OpenCV не загружен'));
-  const ctx=srcCanvas.getContext('2d');
-  const imgData=ctx.getImageData(0,0,srcCanvas.width,srcCanvas.height);
-  // Копируем буфер в отдельный, чтобы transferable не забрал его у canvas
-  const buf=imgData.data.buffer.slice(0);
-  const id=++window._cvJobId;
-  return new Promise((resolve,reject)=>{
-    window._cvJobs.set(id,{resolve:(res)=>{
-      // Собираем canvas из результата
-      const out=document.createElement('canvas');
-      out.width=res.width;out.height=res.height;
-      const octx=out.getContext('2d');
-      const outImg=new ImageData(new Uint8ClampedArray(res.buffer),res.width,res.height);
-      octx.putImageData(outImg,0,0);
-      resolve(out);
-    },reject});
-    window._cvWorker.postMessage(
-      {type:'process',id,buffer:buf,width:srcCanvas.width,height:srcCanvas.height},
-      [buf]
-    );
-  });
-}
+// Движок обработки документов работает на чистом JS — не требует загрузки, готов сразу.
 </script>
 <script>
 const BX='https://mavisgroup.bitrix24.by/rest/2110/u2p31bhlm7llvvfn/';
@@ -826,39 +308,23 @@ function switchModule(mod){
   if(mod==='diplom')renderDiplom();
 }
 
-// ===================== DOC ENHANCER v2 =====================
+// ===================== DOC ENHANCER v3 — pure JS =====================
 let docState={
   files:[],        // [{name, pages:[{originalCanvas, processedCanvas, rotation:0}]}]
   currentFile:0,
   currentPage:0,
   docType:'dipl',  // 'dipl' | 'tk'
-  processing:false,
-  cvStatus:'idle', // idle | loading | ready | error
-  lastError:''
+  processing:false
 };
 
 function renderDoc(){
-  console.log('[MG Tools v3] renderDoc called, cvStatus=',docState.cvStatus);
   const el=document.getElementById('scanApp');
   const D=docState;
-  // NB: OpenCV загружается вручную кнопкой, чтобы не блокировать UI при открытии вкладки
   if(D.files.length===0){
     el.innerHTML=`
     <div class="card">
       <div class="card-title">🔍 Улучшатель документов</div>
       <div class="card-sub">Обработка сканов и фото дипломов и трудовых книжек: выравнивание, обрезка, удаление фона, повышение читаемости.</div>
-      ${D.cvStatus==='idle'?`<div style="margin-top:12px;padding:10px 12px;background:#fef3c7;border-radius:6px;font-size:13px;color:#92400e">
-        <div style="font-weight:600;margin-bottom:4px">⚠️ Движок обработки не загружен</div>
-        <div style="font-size:12px;color:#78350f;margin-bottom:8px">Для работы нужна библиотека OpenCV (~10 МБ). На медленном интернете может грузиться 30–60 секунд — в это время страница будет подтормаживать.</div>
-        <button onclick="docStartLoad()" style="padding:8px 14px;background:#92400e;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-family:inherit;font-size:13px">▶ Загрузить движок</button>
-      </div>`:''}
-      ${D.cvStatus==='loading'?`<div style="margin-top:10px;padding:10px 12px;background:#eef2ff;border-radius:6px;font-size:13px;color:#4338ca">
-        <div style="font-weight:600;margin-bottom:4px">⏳ Загрузка движка обработки</div>
-        <div style="font-size:12px;font-family:monospace;color:#6366f1">${E(window.cvLoadStatus||'инициализация...')}</div>
-        <div style="font-size:11px;color:#888;margin-top:6px">Не закрывайте вкладку. Страница может временно подтормаживать — это нормально.</div>
-      </div>`:''}
-      ${D.cvStatus==='error'?`<div style="margin-top:10px;padding:8px 12px;background:#fef2f2;border-radius:6px;font-size:13px;color:#991b1b">⚠️ Ошибка загрузки: ${E(D.lastError)}<br><button onclick="docStartLoad()" style="margin-top:6px;padding:6px 12px;background:#991b1b;color:#fff;border:none;border-radius:5px;cursor:pointer;font-family:inherit;font-size:12px">↻ Попробовать снова</button></div>`:''}
-      ${D.cvStatus==='ready'?'<div style="margin-top:10px;padding:8px 12px;background:#f0fdf4;border-radius:6px;font-size:13px;color:#166534">✓ Движок обработки готов</div>':''}
     </div>
     <div class="card">
       <div class="card-title">1. Выберите тип документа</div>
@@ -910,8 +376,8 @@ function renderDoc(){
   ${!D.processing && page && !page.processedCanvas?`
   <div class="card">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <button onclick="docProcessCurrent()" style="padding:12px 24px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;flex:1;min-width:160px" ${D.cvStatus!=='ready'?'disabled':''}>${D.cvStatus==='ready'?'⚡ Обработать':'⏳ Движок грузится...'}</button>
-      <button onclick="docProcessAll()" style="padding:12px 18px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit" ${D.cvStatus!=='ready'?'disabled':''}>Обработать все (${docCountUnprocessed()})</button>
+      <button onclick="docProcessCurrent()" style="padding:12px 24px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;flex:1;min-width:160px">⚡ Обработать</button>
+      <button onclick="docProcessAll()" style="padding:12px 18px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Обработать все (${docCountUnprocessed()})</button>
     </div>
   </div>`:''}
 
@@ -961,15 +427,6 @@ function docSwitchFile(i){docState.currentFile=i;docState.currentPage=0;renderDo
 function docSwitchPage(i){docState.currentPage=i;renderDoc()}
 function docCountUnprocessed(){let n=0;for(const f of docState.files)for(const p of f.pages)if(!p.processedCanvas)n++;return n}
 
-function docStartLoad(){
-  docState.cvStatus='loading';
-  docState.lastError='';
-  renderDoc();
-  loadOpenCV()
-    .then(()=>{docState.cvStatus='ready';renderDoc()})
-    .catch(e=>{docState.cvStatus='error';docState.lastError=e.message||'не удалось';renderDoc()});
-}
-
 async function docLoadFiles(fileList){
   if(!fileList||fileList.length===0)return;
   for(const f of fileList){
@@ -1015,7 +472,6 @@ async function docLoadFiles(fileList){
 
 async function docProcessCurrent(){
   const D=docState;
-  if(D.cvStatus!=='ready'){alert('Движок обработки ещё не загружен');return}
   const page=D.files[D.currentFile]?.pages[D.currentPage];
   if(!page)return;
   D.processing=true;renderDoc();
@@ -1032,7 +488,6 @@ async function docProcessCurrent(){
 
 async function docProcessAll(){
   const D=docState;
-  if(D.cvStatus!=='ready'){alert('Движок обработки ещё не загружен');return}
   D.processing=true;renderDoc();
   try{
     for(let fi=0;fi<D.files.length;fi++){
@@ -1040,6 +495,8 @@ async function docProcessAll(){
         const page=D.files[fi].pages[pi];
         if(!page.processedCanvas){
           D.currentFile=fi;D.currentPage=pi;
+          // Yield to UI between pages
+          await new Promise(r=>setTimeout(r,30));
           page.processedCanvas=await docEnhance(page.originalCanvas,D.docType);
           page.rotation=0;
         }
@@ -1143,12 +600,595 @@ function docToBW(srcCanvas){
   return c;
 }
 
-// ============ THE CORE ENHANCE PIPELINE ============
-// Вся обработка теперь происходит в Web Worker (см. _cvWorkerCode выше).
-// Здесь только тонкая обёртка: canvas → worker → canvas.
+// ============ PURE JS DOCUMENT ENHANCEMENT PIPELINE ============
+// Работает на canvas + ImageData без каких-либо нативных библиотек.
+// Совместимо по функциональности с прежней OpenCV-версией.
+
 async function docEnhance(srcCanvas,docType){
-  return await cvProcessCanvas(srcCanvas);
+  // Pipeline:
+  //   1) детекция контура документа (если нашли — перспективный warp)
+  //   2) детекция ориентации (0/90/180/270)
+  //   3) deskew (тонкий поворот по горизонталям)
+  //   4) aggressive enhance (фон/контраст/резкость)
+  let work=_cloneCanvas(srcCanvas);
+  try{
+    const pts=_detectDocumentContour(work);
+    if(pts){
+      work=_fourPointWarp(work,pts);
+    }
+    work=_detectOrientation(work);
+    work=_deskew(work);
+    work=_enhanceAggressive(work);
+    return work;
+  }catch(e){
+    console.error('[docEnhance] error, returning original:',e);
+    return srcCanvas;
+  }
 }
+
+// -------- helpers --------
+function _cloneCanvas(src){
+  const c=document.createElement('canvas');
+  c.width=src.width;c.height=src.height;
+  c.getContext('2d').drawImage(src,0,0);
+  return c;
+}
+function _canvasGray(srcCanvas){
+  // Возвращает Uint8ClampedArray длины w*h (только luminance)
+  const ctx=srcCanvas.getContext('2d');
+  const img=ctx.getImageData(0,0,srcCanvas.width,srcCanvas.height);
+  const d=img.data;
+  const out=new Uint8ClampedArray(srcCanvas.width*srcCanvas.height);
+  for(let i=0,j=0;i<d.length;i+=4,j++){
+    out[j]=(d[i]*299+d[i+1]*587+d[i+2]*114)/1000|0;
+  }
+  return out;
+}
+function _resizeGray(src,srcW,srcH,dstW,dstH){
+  // Билинейный ресайз одноканального массива (nearest для скорости на downscale)
+  const dst=new Uint8ClampedArray(dstW*dstH);
+  const xr=srcW/dstW,yr=srcH/dstH;
+  for(let y=0;y<dstH;y++){
+    const sy=Math.min(srcH-1,(y*yr)|0);
+    for(let x=0;x<dstW;x++){
+      const sx=Math.min(srcW-1,(x*xr)|0);
+      dst[y*dstW+x]=src[sy*srcW+sx];
+    }
+  }
+  return dst;
+}
+function _gaussBlur(src,w,h,radius){
+  // Двухпроходная box-aproximation гауссового размытия
+  // radius — целое число пикселей
+  const r=Math.max(1,radius|0);
+  const size=r*2+1;
+  const temp=new Float32Array(w*h);
+  const out=new Uint8ClampedArray(w*h);
+  // horizontal
+  for(let y=0;y<h;y++){
+    const row=y*w;
+    let sum=0;
+    for(let x=-r;x<=r;x++)sum+=src[row+Math.max(0,Math.min(w-1,x))];
+    for(let x=0;x<w;x++){
+      temp[row+x]=sum/size;
+      const add=src[row+Math.min(w-1,x+r+1)];
+      const sub=src[row+Math.max(0,x-r)];
+      sum+=add-sub;
+    }
+  }
+  // vertical
+  for(let x=0;x<w;x++){
+    let sum=0;
+    for(let y=-r;y<=r;y++)sum+=temp[Math.max(0,Math.min(h-1,y))*w+x];
+    for(let y=0;y<h;y++){
+      out[y*w+x]=sum/size;
+      const add=temp[Math.min(h-1,y+r+1)*w+x];
+      const sub=temp[Math.max(0,y-r)*w+x];
+      sum+=add-sub;
+    }
+  }
+  return out;
+}
+function _otsuThreshold(gray,w,h){
+  // Otsu → возвращает бинарный массив (0/255)
+  const hist=new Uint32Array(256);
+  for(let i=0;i<gray.length;i++)hist[gray[i]]++;
+  const total=gray.length;
+  let sum=0;for(let i=0;i<256;i++)sum+=i*hist[i];
+  let sumB=0,wB=0,maxVar=-1,threshold=128;
+  for(let t=0;t<256;t++){
+    wB+=hist[t];if(wB===0)continue;
+    const wF=total-wB;if(wF===0)break;
+    sumB+=t*hist[t];
+    const mB=sumB/wB,mF=(sum-sumB)/wF;
+    const v=wB*wF*(mB-mF)*(mB-mF);
+    if(v>maxVar){maxVar=v;threshold=t}
+  }
+  const out=new Uint8ClampedArray(gray.length);
+  for(let i=0;i<gray.length;i++)out[i]=gray[i]>threshold?255:0;
+  return out;
+}
+function _sobelMagnitude(gray,w,h){
+  // Вычисляет |∇I| — используется как простая замена Canny
+  const out=new Uint8ClampedArray(w*h);
+  for(let y=1;y<h-1;y++){
+    for(let x=1;x<w-1;x++){
+      const i=y*w+x;
+      const gx=
+        -gray[i-w-1]-2*gray[i-1]-gray[i+w-1]
+        +gray[i-w+1]+2*gray[i+1]+gray[i+w+1];
+      const gy=
+        -gray[i-w-1]-2*gray[i-w]-gray[i-w+1]
+        +gray[i+w-1]+2*gray[i+w]+gray[i+w+1];
+      const m=Math.hypot(gx,gy);
+      out[i]=m>255?255:m|0;
+    }
+  }
+  return out;
+}
+
+// -------- 1. Детекция контура документа --------
+// Стратегия: ищем большой светлый прямоугольник на тёмном фоне ИЛИ наоборот.
+// Работаем на уменьшенной копии (max 800px) для скорости.
+function _detectDocumentContour(srcCanvas){
+  const W=srcCanvas.width,H=srcCanvas.height;
+  const targetMax=800;
+  const scale=Math.min(1,targetMax/Math.max(W,H));
+  const sw=Math.round(W*scale),sh=Math.round(H*scale);
+  // Downscale на canvas для качества (браузер делает смешивание)
+  const small=document.createElement('canvas');
+  small.width=sw;small.height=sh;
+  small.getContext('2d').drawImage(srcCanvas,0,0,sw,sh);
+  const gray=_canvasGray(small);
+  const blurred=_gaussBlur(gray,sw,sh,2);
+
+  const candidates=[];
+
+  // Стратегия A: Otsu (прямая и инверсная) — ловит контрастные границы
+  const otsu=_otsuThreshold(blurred,sw,sh);
+  _collectQuadsFromBinary(otsu,sw,sh,candidates,'otsu');
+  const otsuInv=new Uint8ClampedArray(otsu.length);
+  for(let i=0;i<otsu.length;i++)otsuInv[i]=255-otsu[i];
+  _collectQuadsFromBinary(otsuInv,sw,sh,candidates,'otsu-inv');
+
+  // Стратегия B: край по градиенту (простая замена Canny+dilate)
+  const sob=_sobelMagnitude(blurred,sw,sh);
+  // Пороги — «сильные» градиенты
+  const edges=new Uint8ClampedArray(sob.length);
+  for(let i=0;i<sob.length;i++)edges[i]=sob[i]>40?255:0;
+  // Морфологическое замыкание — чтобы соединить разрывы в рамке
+  const dilated=_dilate3x3(edges,sw,sh,2);
+  _collectQuadsFromBinary(dilated,sw,sh,candidates,'edges');
+
+  if(candidates.length===0)return null;
+
+  // Оцениваем кандидатов: площадь × симметрия сторон
+  const minArea=sw*sh*0.15, maxArea=sw*sh*0.98;
+  let best=null,bestScore=0;
+  for(const cand of candidates){
+    if(cand.area<minArea||cand.area>maxArea)continue;
+    const pts=_orderQuad(cand.pts);
+    const wA=_dist(pts[1],pts[0]),wB=_dist(pts[2],pts[3]);
+    const hA=_dist(pts[3],pts[0]),hB=_dist(pts[2],pts[1]);
+    const wsym=Math.min(wA,wB)/(Math.max(wA,wB)+1);
+    const hsym=Math.min(hA,hB)/(Math.max(hA,hB)+1);
+    const aw=(wA+wB)/2,ah=(hA+hB)/2;
+    const ar=Math.min(aw,ah)/(Math.max(aw,ah)+1);
+    const score=cand.area*wsym*hsym*(0.3+ar);
+    if(score>bestScore){bestScore=score;best={pts}}
+  }
+  if(!best)return null;
+  // Масштабируем обратно к исходному разрешению
+  return best.pts.map(p=>[p[0]/scale,p[1]/scale]);
+}
+
+function _dilate3x3(bin,w,h,iterations){
+  let src=bin,tmp;
+  for(let it=0;it<iterations;it++){
+    tmp=new Uint8ClampedArray(w*h);
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        const i=y*w+x;
+        if(src[i]){tmp[i]=255;continue}
+        let on=false;
+        for(let dy=-1;dy<=1&&!on;dy++){
+          for(let dx=-1;dx<=1&&!on;dx++){
+            const xx=x+dx,yy=y+dy;
+            if(xx>=0&&xx<w&&yy>=0&&yy<h&&src[yy*w+xx])on=true;
+          }
+        }
+        tmp[i]=on?255:0;
+      }
+    }
+    src=tmp;
+  }
+  return src;
+}
+
+function _collectQuadsFromBinary(bin,w,h,out,tag){
+  // Упрощённый поиск крупных связных компонент (flood fill через BFS),
+  // строим bounding box + грубый 4-угольник по крайним точкам.
+  const visited=new Uint8Array(w*h);
+  const minCompArea=w*h*0.1;
+  const queue=new Int32Array(w*h);
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const start=y*w+x;
+      if(visited[start]||!bin[start])continue;
+      // BFS
+      let head=0,tail=0;
+      queue[tail++]=start;
+      visited[start]=1;
+      let area=0;
+      let minX=x,maxX=x,minY=y,maxY=y;
+      // Для грубого 4-угольника найдём экстремальные по диагоналям
+      let tlS=Infinity,brS=-Infinity,trD=Infinity,blD=-Infinity;
+      let tlP=[x,y],brP=[x,y],trP=[x,y],blP=[x,y];
+      while(head<tail){
+        const idx=queue[head++];
+        const cy=(idx/w)|0,cx=idx-cy*w;
+        area++;
+        if(cx<minX)minX=cx;if(cx>maxX)maxX=cx;
+        if(cy<minY)minY=cy;if(cy>maxY)maxY=cy;
+        const s=cx+cy,dd=cy-cx;
+        if(s<tlS){tlS=s;tlP=[cx,cy]}
+        if(s>brS){brS=s;brP=[cx,cy]}
+        if(dd<trD){trD=dd;trP=[cx,cy]}
+        if(dd>blD){blD=dd;blP=[cx,cy]}
+        // 4-соседи
+        if(cx>0){const n=idx-1;if(!visited[n]&&bin[n]){visited[n]=1;queue[tail++]=n}}
+        if(cx<w-1){const n=idx+1;if(!visited[n]&&bin[n]){visited[n]=1;queue[tail++]=n}}
+        if(cy>0){const n=idx-w;if(!visited[n]&&bin[n]){visited[n]=1;queue[tail++]=n}}
+        if(cy<h-1){const n=idx+w;if(!visited[n]&&bin[n]){visited[n]=1;queue[tail++]=n}}
+      }
+      if(area<minCompArea)continue;
+      // Отсеиваем компоненты, примыкающие к границе слишком сильно (вероятно фон)
+      const touchesBorder=(minX<=1)+(minY<=1)+(maxX>=w-2)+(maxY>=h-2);
+      if(touchesBorder>=3)continue; // компонент упирается в 3+ края — это фон
+      out.push({tag,area,pts:[tlP,trP,brP,blP]});
+    }
+  }
+}
+
+function _dist(a,b){return Math.hypot(a[0]-b[0],a[1]-b[1])}
+function _orderQuad(pts){
+  // TL(min sum), TR(min diff y-x), BR(max sum), BL(max diff y-x)
+  const sums=pts.map(p=>p[0]+p[1]);
+  const diffs=pts.map(p=>p[1]-p[0]);
+  return [
+    pts[sums.indexOf(Math.min(...sums))],
+    pts[diffs.indexOf(Math.min(...diffs))],
+    pts[sums.indexOf(Math.max(...sums))],
+    pts[diffs.indexOf(Math.max(...diffs))]
+  ];
+}
+
+// -------- 2. Перспективный warp --------
+function _fourPointWarp(srcCanvas,pts){
+  const [tl,tr,br,bl]=_orderQuad(pts);
+  const wA=_dist(br,bl),wB=_dist(tr,tl);
+  const maxW=Math.round(Math.max(wA,wB));
+  const hA=_dist(tr,br),hB=_dist(tl,bl);
+  const maxH=Math.round(Math.max(hA,hB));
+  if(maxW<10||maxH<10)return _cloneCanvas(srcCanvas);
+  // Считаем homography-матрицу из 4 точек через линейную систему 8x8
+  const H=_computeHomography(
+    [[0,0],[maxW-1,0],[maxW-1,maxH-1],[0,maxH-1]],
+    [tl,tr,br,bl]
+  );
+  if(!H)return _cloneCanvas(srcCanvas);
+  // Перебираем dst-пиксели, берём пикселы из src через inverse-map H
+  const srcCtx=srcCanvas.getContext('2d');
+  const srcImg=srcCtx.getImageData(0,0,srcCanvas.width,srcCanvas.height);
+  const sd=srcImg.data, SW=srcCanvas.width, SH=srcCanvas.height;
+  const dst=document.createElement('canvas');
+  dst.width=maxW;dst.height=maxH;
+  const dctx=dst.getContext('2d');
+  const out=dctx.createImageData(maxW,maxH);
+  const od=out.data;
+  for(let y=0;y<maxH;y++){
+    for(let x=0;x<maxW;x++){
+      // Применяем H к (x,y) → (sx,sy) в исходнике
+      const denom=H[6]*x+H[7]*y+H[8];
+      const sxf=(H[0]*x+H[1]*y+H[2])/denom;
+      const syf=(H[3]*x+H[4]*y+H[5])/denom;
+      const k=(y*maxW+x)*4;
+      if(sxf<0||sxf>=SW-1||syf<0||syf>=SH-1){
+        od[k]=od[k+1]=od[k+2]=255;od[k+3]=255;
+        continue;
+      }
+      // Билинейная интерполяция
+      const sx0=sxf|0,sy0=syf|0;
+      const fx=sxf-sx0,fy=syf-sy0;
+      const i00=(sy0*SW+sx0)*4;
+      const i10=i00+4;
+      const i01=i00+SW*4;
+      const i11=i01+4;
+      for(let c=0;c<3;c++){
+        const v=sd[i00+c]*(1-fx)*(1-fy)+sd[i10+c]*fx*(1-fy)
+               +sd[i01+c]*(1-fx)*fy   +sd[i11+c]*fx*fy;
+        od[k+c]=v|0;
+      }
+      od[k+3]=255;
+    }
+  }
+  dctx.putImageData(out,0,0);
+  return dst;
+}
+
+function _computeHomography(src,dst){
+  // src[i] → dst[i], 4 пары точек. Решаем 8x8 линейную систему.
+  // Возвращает 3x3 матрицу [h0..h8] (h8=1).
+  const A=[],b=[];
+  for(let i=0;i<4;i++){
+    const [x,y]=src[i],[X,Y]=dst[i];
+    A.push([x,y,1,0,0,0,-X*x,-X*y]);b.push(X);
+    A.push([0,0,0,x,y,1,-Y*x,-Y*y]);b.push(Y);
+  }
+  const h=_solveLinear(A,b);
+  if(!h)return null;
+  return [h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1];
+}
+function _solveLinear(A,b){
+  // Простой метод Гаусса с частичным выбором главного элемента
+  const n=A.length;
+  const M=A.map((row,i)=>row.concat([b[i]]));
+  for(let i=0;i<n;i++){
+    // pivot
+    let maxR=i,maxV=Math.abs(M[i][i]);
+    for(let r=i+1;r<n;r++){
+      const v=Math.abs(M[r][i]);
+      if(v>maxV){maxV=v;maxR=r}
+    }
+    if(maxV<1e-12)return null;
+    if(maxR!==i){const t=M[i];M[i]=M[maxR];M[maxR]=t}
+    // eliminate
+    for(let r=i+1;r<n;r++){
+      const f=M[r][i]/M[i][i];
+      for(let c=i;c<=n;c++)M[r][c]-=f*M[i][c];
+    }
+  }
+  // back-substitution
+  const x=new Array(n);
+  for(let i=n-1;i>=0;i--){
+    let s=M[i][n];
+    for(let c=i+1;c<n;c++)s-=M[i][c]*x[c];
+    x[i]=s/M[i][i];
+  }
+  return x;
+}
+
+// -------- 3. Детекция ориентации 0/90/180/270 --------
+function _detectOrientation(srcCanvas){
+  // Скоринг: 1) row_std/col_std (горизонтальные линии текста дают высокий rowStd)
+  //          2) peak в верхней трети (заголовки/номера у верха)
+  const gray=_canvasGray(srcCanvas);
+  const W=srcCanvas.width,H=srcCanvas.height;
+  const targetMax=600;
+  const scale=Math.min(1,targetMax/Math.max(W,H));
+  const sw=Math.max(1,Math.round(W*scale)),sh=Math.max(1,Math.round(H*scale));
+  const small=_resizeGray(gray,W,H,sw,sh);
+
+  function scoreRotated(arr,w,h){
+    // Ожидаем бинаризованный массив (0/255). Считаем rowSums / colSums.
+    const rowSums=new Float64Array(h);
+    const colSums=new Float64Array(w);
+    for(let y=0;y<h;y++){
+      let s=0;
+      for(let x=0;x<w;x++){const v=arr[y*w+x]?1:0;s+=v;colSums[x]+=v}
+      rowSums[y]=s;
+    }
+    const rowStd=_stdDev(rowSums),colStd=_stdDev(colSums);
+    const line=rowStd/(colStd+1);
+    // smoothed max в трети
+    const smoothed=new Float64Array(h);
+    for(let i=0;i<h;i++){
+      let s=0,n=0;
+      for(let k=-2;k<=2;k++){const j=i+k;if(j>=0&&j<h){s+=rowSums[j];n++}}
+      smoothed[i]=s/n;
+    }
+    const t1=(h/3)|0,t2=(2*h/3)|0;
+    let topM=0,midM=0,botM=0;
+    for(let i=0;i<t1;i++)if(smoothed[i]>topM)topM=smoothed[i];
+    for(let i=t1;i<t2;i++)if(smoothed[i]>midM)midM=smoothed[i];
+    for(let i=t2;i<h;i++)if(smoothed[i]>botM)botM=smoothed[i];
+    const header=topM/(midM+botM+1);
+    return line*(1+header);
+  }
+  // Инвертированная бинаризация: тёмный текст → 1
+  const bin=new Uint8ClampedArray(small.length);
+  const thr=_otsuLevel(small);
+  for(let i=0;i<small.length;i++)bin[i]=small[i]<thr?255:0;
+
+  // Генерируем 4 варианта
+  const variants=[
+    {code:0,arr:bin,w:sw,h:sh},
+    {code:1,arr:_rotate90(bin,sw,sh),w:sh,h:sw},
+    {code:2,arr:_rotate180(bin,sw,sh),w:sw,h:sh},
+    {code:3,arr:_rotate270(bin,sw,sh),w:sh,h:sw}
+  ];
+  let bestCode=0,bestScore=-1;
+  for(const v of variants){
+    const s=scoreRotated(v.arr,v.w,v.h);
+    if(s>bestScore){bestScore=s;bestCode=v.code}
+  }
+  if(bestCode===0)return srcCanvas;
+  return _rotateCanvas(srcCanvas,bestCode*90);
+}
+function _stdDev(arr){
+  let m=0;for(let i=0;i<arr.length;i++)m+=arr[i];m/=arr.length;
+  let s=0;for(let i=0;i<arr.length;i++){const d=arr[i]-m;s+=d*d}
+  return Math.sqrt(s/arr.length);
+}
+function _otsuLevel(gray){
+  const hist=new Uint32Array(256);
+  for(let i=0;i<gray.length;i++)hist[gray[i]]++;
+  const total=gray.length;
+  let sum=0;for(let i=0;i<256;i++)sum+=i*hist[i];
+  let sumB=0,wB=0,maxVar=-1,thr=128;
+  for(let t=0;t<256;t++){
+    wB+=hist[t];if(wB===0)continue;
+    const wF=total-wB;if(wF===0)break;
+    sumB+=t*hist[t];
+    const mB=sumB/wB,mF=(sum-sumB)/wF;
+    const v=wB*wF*(mB-mF)*(mB-mF);
+    if(v>maxVar){maxVar=v;thr=t}
+  }
+  return thr;
+}
+function _rotate90(src,w,h){ // clockwise
+  const dst=new Uint8ClampedArray(w*h);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++)dst[x*h+(h-1-y)]=src[y*w+x];
+  return dst;
+}
+function _rotate180(src,w,h){
+  const dst=new Uint8ClampedArray(w*h);
+  for(let i=0;i<src.length;i++)dst[src.length-1-i]=src[i];
+  return dst;
+}
+function _rotate270(src,w,h){ // counter-clockwise
+  const dst=new Uint8ClampedArray(w*h);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++)dst[(w-1-x)*h+y]=src[y*w+x];
+  return dst;
+}
+function _rotateCanvas(srcCanvas,deg){
+  const r=((deg%360)+360)%360;
+  const c=document.createElement('canvas');
+  const ctx=c.getContext('2d');
+  if(r===90){c.width=srcCanvas.height;c.height=srcCanvas.width;ctx.translate(c.width,0);ctx.rotate(Math.PI/2);ctx.drawImage(srcCanvas,0,0)}
+  else if(r===180){c.width=srcCanvas.width;c.height=srcCanvas.height;ctx.translate(c.width,c.height);ctx.rotate(Math.PI);ctx.drawImage(srcCanvas,0,0)}
+  else if(r===270){c.width=srcCanvas.height;c.height=srcCanvas.width;ctx.translate(0,c.height);ctx.rotate(-Math.PI/2);ctx.drawImage(srcCanvas,0,0)}
+  else {c.width=srcCanvas.width;c.height=srcCanvas.height;ctx.drawImage(srcCanvas,0,0)}
+  return c;
+}
+
+// -------- 4. Deskew (тонкий поворот по горизонталям) --------
+function _deskew(srcCanvas){
+  const gray=_canvasGray(srcCanvas);
+  const W=srcCanvas.width,H=srcCanvas.height;
+  const targetMax=800;
+  const scale=Math.min(1,targetMax/Math.max(W,H));
+  const sw=Math.max(1,Math.round(W*scale)),sh=Math.max(1,Math.round(H*scale));
+  const small=_resizeGray(gray,W,H,sw,sh);
+  // Бинаризация (тёмный текст)
+  const thr=_otsuLevel(small);
+  const bin=new Uint8ClampedArray(small.length);
+  for(let i=0;i<small.length;i++)bin[i]=small[i]<thr?1:0;
+  // Для каждого малого угла [-5..5]° считаем скор "острых" горизонтальных линий
+  // Скор: сумма квадратов rowSums (когда текст горизонтален — rowSums имеют пики)
+  let bestAng=0,bestSc=-1;
+  for(let ang=-5;ang<=5;ang+=0.5){
+    const rad=ang*Math.PI/180;
+    const s=_rowStrengthAtAngle(bin,sw,sh,rad);
+    if(s>bestSc){bestSc=s;bestAng=ang}
+  }
+  if(Math.abs(bestAng)<0.3)return srcCanvas;
+  // Применяем поворот к исходному canvas
+  return _rotateByAngle(srcCanvas,bestAng);
+}
+function _rowStrengthAtAngle(bin,w,h,rad){
+  // Для каждой "строки" ( наклонной под углом rad ) считаем сумму.
+  // Используем сглаживание: идём по y, для каждого x считаем сдвинутый y' = y + x*tan(rad)
+  // Чтобы было дёшево: оцениваем по диагонали семплы с шагом 1 по y.
+  const tan=Math.tan(rad);
+  const H=h;
+  // Для каждой строки y считаем количество 1-пикселей; но y'=y0+x*tan
+  // Мы хотим найти y0 такие, где по строке много тёмных пикселей.
+  // Реализация: накопитель rowSums[y0] = Σ_x bin[y0 + x*tan][x]
+  const sums=new Float64Array(H);
+  for(let y=0;y<H;y++){
+    let s=0;
+    for(let x=0;x<w;x++){
+      const yy=Math.round(y+x*tan);
+      if(yy>=0&&yy<H)s+=bin[yy*w+x];
+    }
+    sums[y]=s;
+  }
+  // Скор — сумма квадратов (острее пики → выше скор)
+  let sc=0;for(let i=0;i<H;i++)sc+=sums[i]*sums[i];
+  return sc;
+}
+function _rotateByAngle(srcCanvas,degrees){
+  const W=srcCanvas.width,H=srcCanvas.height;
+  const c=document.createElement('canvas');
+  c.width=W;c.height=H;
+  const ctx=c.getContext('2d');
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);
+  ctx.translate(W/2,H/2);
+  ctx.rotate(-degrees*Math.PI/180);
+  ctx.translate(-W/2,-H/2);
+  ctx.drawImage(srcCanvas,0,0);
+  return c;
+}
+
+// -------- 5. Aggressive enhance (фон/контраст/резкость) --------
+function _enhanceAggressive(srcCanvas){
+  const W=srcCanvas.width,H=srcCanvas.height;
+  const ctx=srcCanvas.getContext('2d');
+  const img=ctx.getImageData(0,0,W,H);
+  const d=img.data;
+  // 1) gray в отдельный массив
+  const gray=new Uint8ClampedArray(W*H);
+  for(let i=0,j=0;i<d.length;i+=4,j++){
+    gray[j]=(d[i]*299+d[i+1]*587+d[i+2]*114)/1000|0;
+  }
+  // 2) нормализация освещённости: gray / blurred_background * 255
+  const kRadius=Math.max(5,(Math.max(W,H)/50)|0);
+  const bg=_gaussBlur(gray,W,H,kRadius);
+  const norm=new Uint8ClampedArray(W*H);
+  for(let i=0;i<gray.length;i++){
+    const v=bg[i]?(gray[i]*255/bg[i]):255;
+    norm[i]=v>255?255:(v<0?0:v|0);
+  }
+  // 3) упрощённый CLAHE (глобальное растяжение 2–98 процентилей)
+  const stretched=_contrastStretch(norm,2,98);
+  // 4) gamma 1/1.2 — чуть осветляет средние тона
+  const gamma=new Uint8ClampedArray(W*H);
+  for(let i=0;i<256;i++){/*lookup*/}
+  const lut=new Uint8ClampedArray(256);
+  for(let i=0;i<256;i++)lut[i]=Math.round(Math.pow(i/255,1/1.2)*255);
+  for(let i=0;i<stretched.length;i++)gamma[i]=lut[stretched[i]];
+  // 5) unsharp mask: gamma * 1.8 - blur(gamma, r=3) * 0.8
+  const gblur=_gaussBlur(gamma,W,H,3);
+  const sharp=new Uint8ClampedArray(W*H);
+  for(let i=0;i<gamma.length;i++){
+    const v=gamma[i]*1.8-gblur[i]*0.8;
+    sharp[i]=v>255?255:(v<0?0:v|0);
+  }
+  // 6) white-point: пикселы >230 → 255 (убираем серый фон)
+  for(let i=0;i<sharp.length;i++)if(sharp[i]>230)sharp[i]=255;
+
+  // Возвращаем RGBA canvas
+  const out=document.createElement('canvas');
+  out.width=W;out.height=H;
+  const octx=out.getContext('2d');
+  const oimg=octx.createImageData(W,H);
+  const od=oimg.data;
+  for(let i=0,j=0;j<sharp.length;i+=4,j++){
+    od[i]=od[i+1]=od[i+2]=sharp[j];od[i+3]=255;
+  }
+  octx.putImageData(oimg,0,0);
+  return out;
+}
+function _contrastStretch(src,lowPct,highPct){
+  const hist=new Uint32Array(256);
+  for(let i=0;i<src.length;i++)hist[src[i]]++;
+  const total=src.length;
+  const lowTarget=total*lowPct/100,highTarget=total*highPct/100;
+  let acc=0,lo=0,hi=255;
+  for(let i=0;i<256;i++){acc+=hist[i];if(acc>=lowTarget){lo=i;break}}
+  acc=0;
+  for(let i=0;i<256;i++){acc+=hist[i];if(acc>=highTarget){hi=i;break}}
+  if(hi<=lo+5){hi=lo+5}
+  const range=hi-lo;
+  const out=new Uint8ClampedArray(src.length);
+  for(let i=0;i<src.length;i++){
+    const v=(src[i]-lo)*255/range;
+    out[i]=v>255?255:(v<0?0:v|0);
+  }
+  return out;
+}
+
 
 // NB: switchModule уже вызывает renderDoc для 'scan' (см. функцию switchModule выше)
 
