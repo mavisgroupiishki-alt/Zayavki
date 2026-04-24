@@ -71,97 +71,487 @@
 <script>
 // PDF.js worker
 if(window.pdfjsLib){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'}
-// OpenCV.js - load on demand with multi-CDN fallback & progress
-window.cvReady=false;
-window.cvLoadProgress=0;
-function loadOpenCV(){
-  if(window.cv && window.cv.Mat)return Promise.resolve(window.cv);
-  if(window._cvLoading)return window._cvLoading;
 
-  // Multiple CDNs: try each in parallel-fallback. First successful wins.
-  // Using <script> tag (browser caching, native loading)
-  const CDNs=[
-    'opencv.js',  // LOCAL FILE (place next to index.html for offline/blocked networks)
+// ============================================================
+// OpenCV Web Worker — вся тяжёлая обработка идёт в отдельном
+// потоке браузера. UI остаётся отзывчивым даже во время
+// компиляции WASM и обработки больших изображений.
+// ============================================================
+window.cvReady=false;
+window.cvLoadStatus='';
+window._cvWorker=null;
+window._cvJobs=new Map(); // id -> {resolve, reject}
+window._cvJobId=0;
+
+// URL'ы с которых воркер попробует загрузить opencv.js.
+// Используем абсолютные URL от текущей страницы, плюс CDN-фолбэки.
+function getCvWorkerCdnList(){
+  const base=location.href.replace(/[^/]*$/,''); // убираем имя файла -> папка
+  return [
+    base+'opencv.js',  // локальная копия рядом с index.html (если залита в репо)
     'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js',
     'https://unpkg.com/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js',
-    'https://cdn.jsdelivr.net/gh/opencv/opencv@4.10.0/platforms/js/opencv.js',
     'https://docs.opencv.org/4.8.0/opencv.js'
   ];
+}
 
-  window.cvLoadStatus='Запуск загрузки...';
+// Код, который выполняется ВНУТРИ воркера (отдельный поток).
+// Упаковываем в функцию, превращаем в строку и создаём Blob URL —
+// это даёт один файл index.html без внешних скриптов воркера.
+function _cvWorkerCode(){
+  // ========== КОД, ИСПОЛНЯЕМЫЙ ВНУТРИ WEB WORKER ==========
+  // Здесь нет DOM, нет window. Есть self, postMessage, importScripts.
+  let cv=null;
+
+  self.onmessage=async function(e){
+    const msg=e.data;
+    try{
+      if(msg.type==='init'){
+        // Попробовать загрузить opencv.js из списка URL'ов по очереди.
+        let lastErr=null;
+        for(const url of msg.urls){
+          try{
+            self.postMessage({type:'status',text:'Пробую: '+url.replace(/^https?:\/\//,'').slice(0,60)});
+            importScripts(url); // блокирует ТОЛЬКО воркер, UI жив
+            // opencv.js после importScripts выставляет глобальный cv.
+            // У @techstark-сборки cv — это Promise; у docs.opencv.org — объект с onRuntimeInitialized.
+            const candidate=self.cv;
+            if(!candidate)throw new Error('переменная cv не появилась после загрузки');
+            self.postMessage({type:'status',text:'Скрипт загружен, инициализация WASM...'});
+            if(typeof candidate.then==='function'){
+              // Promise-вариант (@techstark)
+              cv=await candidate;
+            } else if('onRuntimeInitialized' in candidate || !candidate.Mat){
+              // Emscripten-вариант (docs.opencv.org) — ждём готовности
+              cv=await new Promise((res,rej)=>{
+                let done=false;
+                const tmr=setTimeout(()=>{if(!done){done=true;rej(new Error('таймаут инициализации WASM'))}},60000);
+                candidate.onRuntimeInitialized=()=>{if(!done){done=true;clearTimeout(tmr);res(candidate)}};
+                // Если уже готов — не ждать
+                const poll=()=>{
+                  if(done)return;
+                  if(candidate.Mat){done=true;clearTimeout(tmr);res(candidate);return}
+                  setTimeout(poll,100);
+                };
+                poll();
+              });
+            } else {
+              cv=candidate;
+            }
+            if(!cv||!cv.Mat)throw new Error('cv.Mat недоступен после инициализации');
+            self.postMessage({type:'ready'});
+            return;
+          }catch(err){
+            lastErr=err;
+            self.postMessage({type:'status',text:'Не получилось: '+(err.message||err)});
+          }
+        }
+        throw lastErr||new Error('ни один источник opencv.js не доступен');
+      }
+
+      if(msg.type==='process'){
+        if(!cv)throw new Error('OpenCV не инициализирован');
+        const result=processImage(cv,msg);
+        // Передаём ImageData обратно; буфер можно transferable-ить для скорости
+        self.postMessage(
+          {type:'result',id:msg.id,width:result.width,height:result.height,buffer:result.buffer},
+          [result.buffer]
+        );
+        return;
+      }
+    }catch(err){
+      self.postMessage({type:msg.type==='init'?'error':'job-error',id:msg.id,message:(err&&err.message)||String(err)});
+    }
+  };
+
+  // ========== OpenCV pipeline (тот же самый, что был в главном потоке) ==========
+  function processImage(cv,msg){
+    // Создаём RGBA Mat из переданного ArrayBuffer.
+    // matFromImageData ждёт настоящий ImageData — в воркере его нет,
+    // поэтому создаём Mat напрямую и копируем пикселы через data.set().
+    const src=new cv.Mat(msg.height,msg.width,cv.CV_8UC4);
+    src.data.set(new Uint8ClampedArray(msg.buffer));
+    try{
+      const pts=docDetectContour(cv,src);
+      let warped;
+      if(pts){warped=docFourPointTransform(cv,src,pts);} else {warped=src.clone();}
+      const oriented=docDetectOrientation(cv,warped);
+      warped.delete();
+      const deskewed=docDeskew(cv,oriented);
+      oriented.delete();
+      const enhanced=docEnhanceAggressive(cv,deskewed);
+      deskewed.delete();
+      // Результат — RGBA Mat. Достаём пикселы и отдаём обратно.
+      const w=enhanced.cols,h=enhanced.rows;
+      const out=new Uint8ClampedArray(enhanced.data); // копия
+      enhanced.delete();
+      return {width:w,height:h,buffer:out.buffer};
+    } finally {
+      src.delete();
+    }
+  }
+
+  // ---------- Вспомогательные математические функции ----------
+  function dist(a,b){return Math.hypot(a[0]-b[0],a[1]-b[1])}
+  function orderPts(pts){
+    const sums=pts.map(p=>p[0]+p[1]);
+    const diffs=pts.map(p=>p[1]-p[0]);
+    const tl=pts[sums.indexOf(Math.min(...sums))];
+    const br=pts[sums.indexOf(Math.max(...sums))];
+    const tr=pts[diffs.indexOf(Math.min(...diffs))];
+    const bl=pts[diffs.indexOf(Math.max(...diffs))];
+    return [tl,tr,br,bl];
+  }
+
+  // ---------- Детекция контура документа (3 стратегии) ----------
+  function docDetectContour(cv,src){
+    const h=src.rows,w=src.cols;
+    const scale=1000/Math.max(h,w);
+    const small=new cv.Mat();
+    cv.resize(src,small,new cv.Size(Math.round(w*scale),Math.round(h*scale)));
+    const gray=new cv.Mat();
+    cv.cvtColor(small,gray,cv.COLOR_RGBA2GRAY);
+    const sh=gray.rows,sw=gray.cols;
+    const minArea=sh*sw*0.15;
+    const maxArea=sh*sw*0.98;
+    const candidates=[];
+
+    function tryFindQuads(binImg,tag){
+      const contours=new cv.MatVector();
+      const hierarchy=new cv.Mat();
+      cv.findContours(binImg,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+      const arr=[];
+      for(let i=0;i<contours.size();i++){
+        const c=contours.get(i);
+        const area=cv.contourArea(c);
+        arr.push({c,area,idx:i});
+      }
+      arr.sort((a,b)=>b.area-a.area);
+      for(let k=0;k<Math.min(5,arr.length);k++){
+        const cand=arr[k];
+        if(cand.area<minArea||cand.area>maxArea)continue;
+        const peri=cv.arcLength(cand.c,true);
+        for(const eps of [0.02,0.03,0.04,0.05]){
+          const approx=new cv.Mat();
+          cv.approxPolyDP(cand.c,approx,eps*peri,true);
+          if(approx.rows===4){
+            const pts=[];
+            for(let i=0;i<4;i++){
+              pts.push([approx.data32S[i*2],approx.data32S[i*2+1]]);
+            }
+            candidates.push({tag,area:cand.area,pts});
+            approx.delete();
+            break;
+          }
+          approx.delete();
+        }
+      }
+      for(let i=0;i<contours.size();i++)contours.get(i).delete();
+      contours.delete();
+      hierarchy.delete();
+    }
+
+    // Strategy A: Canny
+    for(const [lo,hi] of [[30,100],[50,150],[20,80]]){
+      const blurred=new cv.Mat();
+      cv.GaussianBlur(gray,blurred,new cv.Size(7,7),0);
+      const edges=new cv.Mat();
+      cv.Canny(blurred,edges,lo,hi);
+      const dilated=new cv.Mat();
+      const k=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(5,5));
+      cv.dilate(edges,dilated,k,new cv.Point(-1,-1),2);
+      tryFindQuads(dilated,'canny');
+      blurred.delete();edges.delete();dilated.delete();k.delete();
+    }
+
+    // Strategy B: Otsu
+    const otsu=new cv.Mat();
+    cv.threshold(gray,otsu,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
+    const otsuInv=new cv.Mat();
+    cv.bitwise_not(otsu,otsuInv);
+    for(const m of [otsu,otsuInv]){
+      const closed=new cv.Mat();
+      const kk=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(15,15));
+      cv.morphologyEx(m,closed,cv.MORPH_CLOSE,kk);
+      tryFindQuads(closed,'otsu');
+      closed.delete();kk.delete();
+    }
+    otsu.delete();otsuInv.delete();
+
+    // Strategy C: Saturation
+    const hsv=new cv.Mat();
+    const smallBGR=new cv.Mat();
+    cv.cvtColor(small,smallBGR,cv.COLOR_RGBA2BGR);
+    cv.cvtColor(smallBGR,hsv,cv.COLOR_BGR2HSV);
+    const hsvChannels=new cv.MatVector();
+    cv.split(hsv,hsvChannels);
+    const sat=hsvChannels.get(1);
+    const satBin=new cv.Mat();
+    cv.threshold(sat,satBin,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
+    const satClosed=new cv.Mat();
+    const sk=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(15,15));
+    cv.morphologyEx(satBin,satClosed,cv.MORPH_CLOSE,sk);
+    tryFindQuads(satClosed,'sat');
+    hsv.delete();smallBGR.delete();
+    for(let i=0;i<hsvChannels.size();i++)hsvChannels.get(i).delete();
+    hsvChannels.delete();
+    satBin.delete();satClosed.delete();sk.delete();
+
+    small.delete();gray.delete();
+
+    if(candidates.length===0)return null;
+    function score(cand){
+      const pts=orderPts(cand.pts);
+      const wA=dist(pts[1],pts[0]),wB=dist(pts[2],pts[3]);
+      const hA=dist(pts[3],pts[0]),hB=dist(pts[2],pts[1]);
+      const wsym=Math.min(wA,wB)/(Math.max(wA,wB)+1);
+      const hsym=Math.min(hA,hB)/(Math.max(hA,hB)+1);
+      const aw=(wA+wB)/2,ah=(hA+hB)/2;
+      const ar=Math.min(aw,ah)/(Math.max(aw,ah)+1);
+      return cand.area*wsym*hsym*(0.3+ar);
+    }
+    candidates.sort((a,b)=>score(b)-score(a));
+    const best=candidates[0];
+    return best.pts.map(p=>[p[0]/scale,p[1]/scale]);
+  }
+
+  function docFourPointTransform(cv,src,pts){
+    const [tl,tr,br,bl]=orderPts(pts);
+    const wA=dist(br,bl),wB=dist(tr,tl);
+    const maxW=Math.round(Math.max(wA,wB));
+    const hA=dist(tr,br),hB=dist(tl,bl);
+    const maxH=Math.round(Math.max(hA,hB));
+    const srcTri=cv.matFromArray(4,1,cv.CV_32FC2,[tl[0],tl[1],tr[0],tr[1],br[0],br[1],bl[0],bl[1]]);
+    const dstTri=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,maxW-1,0,maxW-1,maxH-1,0,maxH-1]);
+    const M=cv.getPerspectiveTransform(srcTri,dstTri);
+    const warped=new cv.Mat();
+    cv.warpPerspective(src,warped,M,new cv.Size(maxW,maxH),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(255,255,255,255));
+    srcTri.delete();dstTri.delete();M.delete();
+    return warped;
+  }
+
+  function docDetectOrientation(cv,img){
+    const gray=new cv.Mat();
+    cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
+    const h=gray.rows,w=gray.cols;
+    const scale=800/Math.max(h,w);
+    const small=new cv.Mat();
+    cv.resize(gray,small,new cv.Size(Math.round(w*scale),Math.round(h*scale)));
+    gray.delete();
+
+    function scoreRotation(rotCode){
+      const rot=new cv.Mat();
+      if(rotCode===0)small.copyTo(rot);
+      else if(rotCode===1)cv.rotate(small,rot,cv.ROTATE_90_CLOCKWISE);
+      else if(rotCode===2)cv.rotate(small,rot,cv.ROTATE_180);
+      else cv.rotate(small,rot,cv.ROTATE_90_COUNTERCLOCKWISE);
+      const bin=new cv.Mat();
+      cv.threshold(rot,bin,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
+      const rh=bin.rows,rw=bin.cols;
+      const rowSums=new Float64Array(rh);
+      const colSums=new Float64Array(rw);
+      for(let y=0;y<rh;y++){
+        let s=0;
+        for(let x=0;x<rw;x++){
+          const v=bin.data[y*rw+x]>0?1:0;
+          s+=v;colSums[x]+=v;
+        }
+        rowSums[y]=s;
+      }
+      function std(arr){
+        let m=0;for(const v of arr)m+=v;m/=arr.length;
+        let s=0;for(const v of arr)s+=(v-m)*(v-m);
+        return Math.sqrt(s/arr.length);
+      }
+      const rowStd=std(rowSums),colStd=std(colSums);
+      const line=rowStd/(colStd+1);
+      const smoothed=new Float64Array(rh);
+      for(let i=0;i<rh;i++){
+        let s=0,n=0;
+        for(let k=-2;k<=2;k++){const j=i+k;if(j>=0&&j<rh){s+=rowSums[j];n++}}
+        smoothed[i]=s/n;
+      }
+      const t1=Math.floor(rh/3),t2=Math.floor(2*rh/3);
+      let topMax=0,midMax=0,botMax=0;
+      for(let i=0;i<t1;i++)if(smoothed[i]>topMax)topMax=smoothed[i];
+      for(let i=t1;i<t2;i++)if(smoothed[i]>midMax)midMax=smoothed[i];
+      for(let i=t2;i<rh;i++)if(smoothed[i]>botMax)botMax=smoothed[i];
+      const headerScore=topMax/(midMax+botMax+1);
+      const total=line*(1+headerScore);
+      rot.delete();bin.delete();
+      return total;
+    }
+    let bestRot=0,bestScore=-1;
+    for(let r=0;r<4;r++){
+      const s=scoreRotation(r);
+      if(s>bestScore){bestScore=s;bestRot=r}
+    }
+    small.delete();
+    const out=new cv.Mat();
+    if(bestRot===0)img.copyTo(out);
+    else if(bestRot===1)cv.rotate(img,out,cv.ROTATE_90_CLOCKWISE);
+    else if(bestRot===2)cv.rotate(img,out,cv.ROTATE_180);
+    else cv.rotate(img,out,cv.ROTATE_90_COUNTERCLOCKWISE);
+    return out;
+  }
+
+  function docDeskew(cv,img){
+    const gray=new cv.Mat();
+    cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
+    const edges=new cv.Mat();
+    cv.Canny(gray,edges,50,150);
+    const lines=new cv.Mat();
+    cv.HoughLines(edges,lines,1,Math.PI/360,200);
+    const angles=[];
+    const N=Math.min(lines.rows,100);
+    for(let i=0;i<N;i++){
+      const theta=lines.data32F[i*2+1];
+      const angle=(theta*180/Math.PI)-90;
+      if(Math.abs(angle)<15)angles.push(angle);
+    }
+    gray.delete();edges.delete();lines.delete();
+    if(angles.length<5)return img.clone();
+    angles.sort((a,b)=>a-b);
+    const median=angles[Math.floor(angles.length/2)];
+    if(Math.abs(median)<0.3)return img.clone();
+    const h=img.rows,w=img.cols;
+    const center=new cv.Point(w/2,h/2);
+    const M=cv.getRotationMatrix2D(center,median,1.0);
+    const out=new cv.Mat();
+    cv.warpAffine(img,out,M,new cv.Size(w,h),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(255,255,255,255));
+    M.delete();
+    return out;
+  }
+
+  function docEnhanceAggressive(cv,img){
+    const gray=new cv.Mat();
+    cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
+    const kSize=(Math.max(gray.rows,gray.cols)/25)|0;
+    const k=kSize%2===0?kSize+1:kSize;
+    const bg=new cv.Mat();
+    cv.GaussianBlur(gray,bg,new cv.Size(k,k),0);
+    const norm=new cv.Mat();
+    cv.divide(gray,bg,norm,255);
+    gray.delete();bg.delete();
+    const clahe=new cv.CLAHE(3.0,new cv.Size(16,16));
+    const cl=new cv.Mat();
+    clahe.apply(norm,cl);
+    norm.delete();clahe.delete();
+    const lut=new cv.Mat(1,256,cv.CV_8UC1);
+    for(let i=0;i<256;i++)lut.data[i]=Math.round(Math.pow(i/255,1/1.2)*255);
+    const gamma=new cv.Mat();
+    cv.LUT(cl,lut,gamma);
+    cl.delete();lut.delete();
+    const blur=new cv.Mat();
+    cv.GaussianBlur(gamma,blur,new cv.Size(0,0),2.0);
+    const sharp=new cv.Mat();
+    cv.addWeighted(gamma,1.8,blur,-0.8,0,sharp);
+    gamma.delete();blur.delete();
+    const w=sharp.cols,h=sharp.rows;
+    for(let i=0;i<w*h;i++){
+      if(sharp.data[i]>230)sharp.data[i]=255;
+    }
+    const out=new cv.Mat();
+    cv.cvtColor(sharp,out,cv.COLOR_GRAY2RGBA);
+    sharp.delete();
+    return out;
+  }
+  // ========== КОНЕЦ КОДА ВНУТРИ WORKER ==========
+}
+
+// Создание воркера из inline-кода (без отдельного файла)
+function _createCvWorker(){
+  const src='('+_cvWorkerCode.toString()+')();';
+  const blob=new Blob([src],{type:'application/javascript'});
+  return new Worker(URL.createObjectURL(blob));
+}
+
+// Публичный API: загрузить OpenCV (только один раз)
+function loadOpenCV(){
+  if(window.cvReady)return Promise.resolve();
+  if(window._cvLoading)return window._cvLoading;
+
+  window.cvLoadStatus='Запуск воркера...';
   function setStatus(msg){
     window.cvLoadStatus=msg;
-    console.log('[OpenCV]',msg);
+    console.log('[OpenCV-Worker]',msg);
     if(typeof renderDoc==='function' && document.getElementById('scanApp'))renderDoc();
   }
 
-  function tryLoadScript(url,timeoutMs){
-    return new Promise((resolve,reject)=>{
-      setStatus('Пробую: '+url.replace(/^https:\/\//,''));
-      const s=document.createElement('script');
-      s.src=url;
-      s.async=true;
-      let done=false;
-      const tmr=setTimeout(()=>{
-        if(!done){done=true;setStatus('Таймаут на '+url.split('/')[2]);reject(new Error('timeout'))}
-      },timeoutMs);
-      s.onload=()=>{
-        if(done)return;
-        setStatus('Скрипт загружен с '+url.split('/')[2]+', инициализация...');
-        const check=(tries)=>{
-          if(window.cv && window.cv.Mat){
-            done=true;clearTimeout(tmr);
-            window.cvReady=true;
-            setStatus('✓ Готово');
-            resolve(window.cv);
-          } else if(window.cv && typeof window.cv.then==='function'){
-            // newer opencv-js exports a Promise
-            window.cv.then(()=>{
-              done=true;clearTimeout(tmr);
-              window.cvReady=true;
-              setStatus('✓ Готово');
-              resolve(window.cv);
-            }).catch(e=>{done=true;clearTimeout(tmr);reject(e)});
-          } else if(window.cv && 'onRuntimeInitialized' in window.cv){
-            window.cv.onRuntimeInitialized=()=>{
-              done=true;clearTimeout(tmr);
-              window.cvReady=true;
-              setStatus('✓ Готово');
-              resolve(window.cv);
-            };
-          } else if(tries<200){
-            setTimeout(()=>check(tries+1),100);
-          } else {
-            done=true;clearTimeout(tmr);reject(new Error('cv не инициализировался'));
-          }
-        };
-        check(0);
-      };
-      s.onerror=()=>{
-        if(done)return;
-        done=true;clearTimeout(tmr);
-        setStatus('Ошибка загрузки с '+url.split('/')[2]);
-        reject(new Error('script load error'));
-      };
-      document.head.appendChild(s);
-    });
-  }
-
-  window._cvLoading=(async ()=>{
-    let lastErr=null;
-    for(const url of CDNs){
-      try{
-        // Local file: shorter timeout (10s). CDN: 45s.
-        const timeout=url.startsWith('http')?45000:10000;
-        return await tryLoadScript(url,timeout);
-      }catch(e){
-        lastErr=e;
-      }
+  window._cvLoading=new Promise((resolve,reject)=>{
+    let worker;
+    try{
+      worker=_createCvWorker();
+    }catch(e){
+      setStatus('❌ Браузер не поддерживает Web Worker: '+e.message);
+      reject(e);
+      return;
     }
-    setStatus('❌ Все источники недоступны: '+(lastErr?.message||'неизвестная ошибка'));
-    throw lastErr||new Error('все источники недоступны');
-  })();
+    window._cvWorker=worker;
+    worker.onmessage=(e)=>{
+      const m=e.data;
+      if(m.type==='status'){setStatus(m.text);return}
+      if(m.type==='ready'){
+        window.cvReady=true;
+        setStatus('✓ Готово');
+        resolve();
+        return;
+      }
+      if(m.type==='error'){
+        setStatus('❌ '+m.message);
+        reject(new Error(m.message));
+        return;
+      }
+      if(m.type==='result'){
+        const job=window._cvJobs.get(m.id);
+        if(job){
+          window._cvJobs.delete(m.id);
+          job.resolve({width:m.width,height:m.height,buffer:m.buffer});
+        }
+        return;
+      }
+      if(m.type==='job-error'){
+        const job=window._cvJobs.get(m.id);
+        if(job){
+          window._cvJobs.delete(m.id);
+          job.reject(new Error(m.message));
+        }
+        return;
+      }
+    };
+    worker.onerror=(e)=>{
+      setStatus('❌ Ошибка воркера: '+(e.message||'unknown'));
+      reject(new Error(e.message||'worker error'));
+    };
+    // Стартуем инициализацию
+    worker.postMessage({type:'init',urls:getCvWorkerCdnList()});
+  });
   return window._cvLoading;
+}
+
+// Отправить canvas в воркер, получить обработанный canvas обратно
+function cvProcessCanvas(srcCanvas){
+  if(!window.cvReady||!window._cvWorker)return Promise.reject(new Error('OpenCV не загружен'));
+  const ctx=srcCanvas.getContext('2d');
+  const imgData=ctx.getImageData(0,0,srcCanvas.width,srcCanvas.height);
+  // Копируем буфер в отдельный, чтобы transferable не забрал его у canvas
+  const buf=imgData.data.buffer.slice(0);
+  const id=++window._cvJobId;
+  return new Promise((resolve,reject)=>{
+    window._cvJobs.set(id,{resolve:(res)=>{
+      // Собираем canvas из результата
+      const out=document.createElement('canvas');
+      out.width=res.width;out.height=res.height;
+      const octx=out.getContext('2d');
+      const outImg=new ImageData(new Uint8ClampedArray(res.buffer),res.width,res.height);
+      octx.putImageData(outImg,0,0);
+      resolve(out);
+    },reject});
+    window._cvWorker.postMessage(
+      {type:'process',id,buffer:buf,width:srcCanvas.width,height:srcCanvas.height},
+      [buf]
+    );
+  });
 }
 </script>
 <script>
@@ -717,321 +1107,10 @@ function docToBW(srcCanvas){
 }
 
 // ============ THE CORE ENHANCE PIPELINE ============
+// Вся обработка теперь происходит в Web Worker (см. _cvWorkerCode выше).
+// Здесь только тонкая обёртка: canvas → worker → canvas.
 async function docEnhance(srcCanvas,docType){
-  const cv=window.cv;
-  if(!cv)throw new Error('OpenCV not ready');
-  // Read Mat from canvas
-  let src=cv.imread(srcCanvas);
-  try{
-    // Step 1: Document contour detection (multi-strategy)
-    const pts=docDetectContour(cv,src);
-    let warped;
-    if(pts){
-      warped=docFourPointTransform(cv,src,pts);
-    } else {
-      warped=src.clone();
-    }
-    // Step 2: orientation detection (0/90/180/270)
-    const oriented=docDetectOrientation(cv,warped);
-    warped.delete();
-    // Step 3: deskew fine
-    const deskewed=docDeskew(cv,oriented);
-    oriented.delete();
-    // Step 4: aggressive enhancement
-    const enhanced=docEnhanceAggressive(cv,deskewed);
-    deskewed.delete();
-    // Output canvas
-    const out=document.createElement('canvas');
-    cv.imshow(out,enhanced);
-    enhanced.delete();
-    return out;
-  } finally {
-    src.delete();
-  }
-}
-
-function docDetectContour(cv,src){
-  const h=src.rows,w=src.cols;
-  const scale=1000/Math.max(h,w);
-  const small=new cv.Mat();
-  cv.resize(src,small,new cv.Size(Math.round(w*scale),Math.round(h*scale)));
-  const gray=new cv.Mat();
-  cv.cvtColor(small,gray,cv.COLOR_RGBA2GRAY);
-  const sh=gray.rows,sw=gray.cols;
-  const minArea=sh*sw*0.15;
-  const maxArea=sh*sw*0.98;
-  const candidates=[];
-  
-  function tryFindQuads(binImg,tag){
-    const contours=new cv.MatVector();
-    const hierarchy=new cv.Mat();
-    cv.findContours(binImg,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-    // Get top 5 by area
-    const arr=[];
-    for(let i=0;i<contours.size();i++){
-      const c=contours.get(i);
-      const area=cv.contourArea(c);
-      arr.push({c,area,idx:i});
-    }
-    arr.sort((a,b)=>b.area-a.area);
-    for(let k=0;k<Math.min(5,arr.length);k++){
-      const cand=arr[k];
-      if(cand.area<minArea||cand.area>maxArea)continue;
-      const peri=cv.arcLength(cand.c,true);
-      for(const eps of [0.02,0.03,0.04,0.05]){
-        const approx=new cv.Mat();
-        cv.approxPolyDP(cand.c,approx,eps*peri,true);
-        if(approx.rows===4){
-          const pts=[];
-          for(let i=0;i<4;i++){
-            pts.push([approx.data32S[i*2],approx.data32S[i*2+1]]);
-          }
-          candidates.push({tag,area:cand.area,pts});
-          approx.delete();
-          break;
-        }
-        approx.delete();
-      }
-    }
-    // Clean up all contours
-    for(let i=0;i<contours.size();i++)contours.get(i).delete();
-    contours.delete();
-    hierarchy.delete();
-  }
-  
-  // Strategy A: Canny
-  for(const [lo,hi] of [[30,100],[50,150],[20,80]]){
-    const blurred=new cv.Mat();
-    cv.GaussianBlur(gray,blurred,new cv.Size(7,7),0);
-    const edges=new cv.Mat();
-    cv.Canny(blurred,edges,lo,hi);
-    const dilated=new cv.Mat();
-    const k=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(5,5));
-    cv.dilate(edges,dilated,k,new cv.Point(-1,-1),2);
-    tryFindQuads(dilated,'canny');
-    blurred.delete();edges.delete();dilated.delete();k.delete();
-  }
-  
-  // Strategy B: Otsu
-  const otsu=new cv.Mat();
-  cv.threshold(gray,otsu,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
-  const otsuInv=new cv.Mat();
-  cv.bitwise_not(otsu,otsuInv);
-  for(const m of [otsu,otsuInv]){
-    const closed=new cv.Mat();
-    const kk=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(15,15));
-    cv.morphologyEx(m,closed,cv.MORPH_CLOSE,kk);
-    tryFindQuads(closed,'otsu');
-    closed.delete();kk.delete();
-  }
-  otsu.delete();otsuInv.delete();
-  
-  // Strategy C: Saturation-based
-  const hsv=new cv.Mat();
-  const smallBGR=new cv.Mat();
-  cv.cvtColor(small,smallBGR,cv.COLOR_RGBA2BGR);
-  cv.cvtColor(smallBGR,hsv,cv.COLOR_BGR2HSV);
-  const hsvChannels=new cv.MatVector();
-  cv.split(hsv,hsvChannels);
-  const sat=hsvChannels.get(1);
-  const satBin=new cv.Mat();
-  cv.threshold(sat,satBin,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
-  const satClosed=new cv.Mat();
-  const sk=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(15,15));
-  cv.morphologyEx(satBin,satClosed,cv.MORPH_CLOSE,sk);
-  tryFindQuads(satClosed,'sat');
-  hsv.delete();smallBGR.delete();
-  for(let i=0;i<hsvChannels.size();i++)hsvChannels.get(i).delete();
-  hsvChannels.delete();
-  satBin.delete();satClosed.delete();sk.delete();
-  
-  small.delete();gray.delete();
-  
-  if(candidates.length===0)return null;
-  // Pick best: largest area with good aspect (not too thin)
-  function score(cand){
-    const pts=orderPts(cand.pts);
-    const wA=dist(pts[1],pts[0]),wB=dist(pts[2],pts[3]);
-    const hA=dist(pts[3],pts[0]),hB=dist(pts[2],pts[1]);
-    const wsym=Math.min(wA,wB)/(Math.max(wA,wB)+1);
-    const hsym=Math.min(hA,hB)/(Math.max(hA,hB)+1);
-    const aw=(wA+wB)/2,ah=(hA+hB)/2;
-    const ar=Math.min(aw,ah)/(Math.max(aw,ah)+1);
-    return cand.area*wsym*hsym*(0.3+ar);
-  }
-  candidates.sort((a,b)=>score(b)-score(a));
-  const best=candidates[0];
-  console.log(`[DocEnhance] contour via ${best.tag}, area=${Math.round(best.area)}`);
-  // Scale back to original
-  return best.pts.map(p=>[p[0]/scale,p[1]/scale]);
-}
-
-function dist(a,b){return Math.hypot(a[0]-b[0],a[1]-b[1])}
-function orderPts(pts){
-  // top-left (min sum), top-right (min diff), bottom-right (max sum), bottom-left (max diff)
-  const sums=pts.map(p=>p[0]+p[1]);
-  const diffs=pts.map(p=>p[1]-p[0]);
-  const tl=pts[sums.indexOf(Math.min(...sums))];
-  const br=pts[sums.indexOf(Math.max(...sums))];
-  const tr=pts[diffs.indexOf(Math.min(...diffs))];
-  const bl=pts[diffs.indexOf(Math.max(...diffs))];
-  return [tl,tr,br,bl];
-}
-
-function docFourPointTransform(cv,src,pts){
-  const [tl,tr,br,bl]=orderPts(pts);
-  const wA=dist(br,bl),wB=dist(tr,tl);
-  const maxW=Math.round(Math.max(wA,wB));
-  const hA=dist(tr,br),hB=dist(tl,bl);
-  const maxH=Math.round(Math.max(hA,hB));
-  const srcTri=cv.matFromArray(4,1,cv.CV_32FC2,[tl[0],tl[1],tr[0],tr[1],br[0],br[1],bl[0],bl[1]]);
-  const dstTri=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,maxW-1,0,maxW-1,maxH-1,0,maxH-1]);
-  const M=cv.getPerspectiveTransform(srcTri,dstTri);
-  const warped=new cv.Mat();
-  cv.warpPerspective(src,warped,M,new cv.Size(maxW,maxH),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(255,255,255,255));
-  srcTri.delete();dstTri.delete();M.delete();
-  return warped;
-}
-
-function docDetectOrientation(cv,img){
-  // Try 4 orientations, score each by:
-  //   line_score = row_std / col_std  (clear horizontal text lines)
-  //   header_score = peak in top third / peaks elsewhere
-  const gray=new cv.Mat();
-  cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
-  const h=gray.rows,w=gray.cols;
-  const scale=800/Math.max(h,w);
-  const small=new cv.Mat();
-  cv.resize(gray,small,new cv.Size(Math.round(w*scale),Math.round(h*scale)));
-  gray.delete();
-  
-  function scoreRotation(rotCode){
-    const rot=new cv.Mat();
-    if(rotCode===0)small.copyTo(rot);
-    else if(rotCode===1)cv.rotate(small,rot,cv.ROTATE_90_CLOCKWISE);
-    else if(rotCode===2)cv.rotate(small,rot,cv.ROTATE_180);
-    else cv.rotate(small,rot,cv.ROTATE_90_COUNTERCLOCKWISE);
-    const bin=new cv.Mat();
-    cv.threshold(rot,bin,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);
-    // row_sums
-    const rh=bin.rows,rw=bin.cols;
-    const rowSums=new Float64Array(rh);
-    const colSums=new Float64Array(rw);
-    for(let y=0;y<rh;y++){
-      let s=0;
-      for(let x=0;x<rw;x++){
-        const v=bin.data[y*rw+x]>0?1:0;
-        s+=v;colSums[x]+=v;
-      }
-      rowSums[y]=s;
-    }
-    function std(arr){
-      let m=0;for(const v of arr)m+=v;m/=arr.length;
-      let s=0;for(const v of arr)s+=(v-m)*(v-m);
-      return Math.sqrt(s/arr.length);
-    }
-    const rowStd=std(rowSums),colStd=std(colSums);
-    const line=rowStd/(colStd+1);
-    // smoothed max in thirds
-    const smoothed=new Float64Array(rh);
-    for(let i=0;i<rh;i++){
-      let s=0,n=0;
-      for(let k=-2;k<=2;k++){const j=i+k;if(j>=0&&j<rh){s+=rowSums[j];n++}}
-      smoothed[i]=s/n;
-    }
-    const t1=Math.floor(rh/3),t2=Math.floor(2*rh/3);
-    let topMax=0,midMax=0,botMax=0;
-    for(let i=0;i<t1;i++)if(smoothed[i]>topMax)topMax=smoothed[i];
-    for(let i=t1;i<t2;i++)if(smoothed[i]>midMax)midMax=smoothed[i];
-    for(let i=t2;i<rh;i++)if(smoothed[i]>botMax)botMax=smoothed[i];
-    const headerScore=topMax/(midMax+botMax+1);
-    const total=line*(1+headerScore);
-    rot.delete();bin.delete();
-    return total;
-  }
-  let bestRot=0,bestScore=-1;
-  for(let r=0;r<4;r++){
-    const s=scoreRotation(r);
-    if(s>bestScore){bestScore=s;bestRot=r}
-  }
-  small.delete();
-  const out=new cv.Mat();
-  if(bestRot===0)img.copyTo(out);
-  else if(bestRot===1)cv.rotate(img,out,cv.ROTATE_90_CLOCKWISE);
-  else if(bestRot===2)cv.rotate(img,out,cv.ROTATE_180);
-  else cv.rotate(img,out,cv.ROTATE_90_COUNTERCLOCKWISE);
-  return out;
-}
-
-function docDeskew(cv,img){
-  // Fine rotation by Hough lines
-  const gray=new cv.Mat();
-  cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
-  const edges=new cv.Mat();
-  cv.Canny(gray,edges,50,150);
-  const lines=new cv.Mat();
-  cv.HoughLines(edges,lines,1,Math.PI/360,200);
-  const angles=[];
-  const N=Math.min(lines.rows,100);
-  for(let i=0;i<N;i++){
-    const theta=lines.data32F[i*2+1];
-    const angle=(theta*180/Math.PI)-90;
-    if(Math.abs(angle)<15)angles.push(angle);
-  }
-  gray.delete();edges.delete();lines.delete();
-  if(angles.length<5)return img.clone();
-  angles.sort((a,b)=>a-b);
-  const median=angles[Math.floor(angles.length/2)];
-  if(Math.abs(median)<0.3)return img.clone();
-  const h=img.rows,w=img.cols;
-  const center=new cv.Point(w/2,h/2);
-  const M=cv.getRotationMatrix2D(center,median,1.0);
-  const out=new cv.Mat();
-  cv.warpAffine(img,out,M,new cv.Size(w,h),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(255,255,255,255));
-  M.delete();
-  return out;
-}
-
-function docEnhanceAggressive(cv,img){
-  // 1) to gray
-  const gray=new cv.Mat();
-  cv.cvtColor(img,gray,cv.COLOR_RGBA2GRAY);
-  // 2) illumination normalization: divide by blurred background
-  const kSize=(Math.max(gray.rows,gray.cols)/25)|0;
-  const k=kSize%2===0?kSize+1:kSize;
-  const bg=new cv.Mat();
-  cv.GaussianBlur(gray,bg,new cv.Size(k,k),0);
-  // divide: normalized = gray / bg * 255
-  const norm=new cv.Mat();
-  cv.divide(gray,bg,norm,255);
-  gray.delete();bg.delete();
-  // 3) CLAHE
-  const clahe=new cv.CLAHE(3.0,new cv.Size(16,16));
-  const cl=new cv.Mat();
-  clahe.apply(norm,cl);
-  norm.delete();clahe.delete();
-  // 4) gamma 1.2
-  const lut=new cv.Mat(1,256,cv.CV_8UC1);
-  for(let i=0;i<256;i++)lut.data[i]=Math.round(Math.pow(i/255,1/1.2)*255);
-  const gamma=new cv.Mat();
-  cv.LUT(cl,lut,gamma);
-  cl.delete();lut.delete();
-  // 5) unsharp mask
-  const blur=new cv.Mat();
-  cv.GaussianBlur(gamma,blur,new cv.Size(0,0),2.0);
-  const sharp=new cv.Mat();
-  cv.addWeighted(gamma,1.8,blur,-0.8,0,sharp);
-  gamma.delete();blur.delete();
-  // 6) white point adjustment: pixels >230 -> 255
-  const w=sharp.cols,h=sharp.rows;
-  for(let i=0;i<w*h;i++){
-    if(sharp.data[i]>230)sharp.data[i]=255;
-  }
-  // Convert back to RGBA for canvas
-  const out=new cv.Mat();
-  cv.cvtColor(sharp,out,cv.COLOR_GRAY2RGBA);
-  sharp.delete();
-  return out;
+  return await cvProcessCanvas(srcCanvas);
 }
 
 // NB: switchModule уже вызывает renderDoc для 'scan' (см. функцию switchModule выше)
