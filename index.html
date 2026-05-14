@@ -50,6 +50,13 @@
 .ocr-banner button:hover{background:rgba(255,255,255,.3)}
 .kp-progress{padding:12px;background:#f0f5ff;border:1px solid #2563eb;border-radius:8px;margin-top:10px;font-size:13px;color:#1e3a8a}
 .kp-raw-text{margin-top:10px;padding:10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#78350f;max-height:200px;overflow-y:auto;font-family:monospace;white-space:pre-wrap}
+.doc-confirm-card{margin-top:10px;margin-bottom:14px;padding:14px;background:linear-gradient(135deg,#eff6ff,#dbeafe);border:2px solid #2563eb;border-radius:10px}
+.dc-header{margin-bottom:8px;font-size:14px;color:#1a1a2e}
+.dc-list{max-height:380px;overflow-y:auto;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:6px}
+.dc-item{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-bottom:1px solid #f1f5f9}
+.dc-item:last-child{border-bottom:none}
+.dc-item:hover{background:#f8fafc}
+.dc-item input[type=checkbox]{margin-top:3px;width:16px;height:16px;cursor:pointer;flex-shrink:0}
 </style>
 </head>
 <body>
@@ -97,7 +104,65 @@ const W=[{id:'w1',c:'Устройство оснований фундамент�
 {id:'w47',c:'Монтаж систем пожарной сигнализации (СПС)',t:'ТКП 365-2011',s:'Монтаж СПС (электротехническая часть); Монтаж извещателей СПС (электротехническая часть); Монтаж линейной части СПС (электротехническая часть)',k:'ГОСТ 26433.0-85, ГОСТ 26433.2-94'},
 {id:'w48',c:'Пожарная автоматика зданий и сооружений',t:'СН 2.02.03-2019',s:'Монтаж системы пожарной сигнализации и системы оповещения и управления эвакуацией людей при пожаре (электротехническая часть)',k:'ГОСТ 26433.0-85, ГОСТ 26433.2-94'}];
 
-let S={step:0,company:{},appType:'bsc',iso:{consultant:'Клепицкая Виктория Александровна',scope:'выполнение функций генерального подрядчика, производство строительно-монтажных работ',yearImplemented:'2026',subdivisions:'нет',prevCert:'нет'},cert:{standard:'',productName:'',tnved:'',okp:'',production:'Серийно',scheme:'1С'},spk:{headPosition:'',headName:''},sw:new Set(),responsible:{},bxS:'',bxR:[],bxL:false,gen:false,done:false,ws:'',kpMsg:'',kpRawText:'',kpProgress:''};
+// ============================================================
+// WORK_KEYS — словарь отличительных ключевых фраз для каждого вида работ.
+// Используется для matching по тексту КП (после OCR) и СПК (после OCR).
+// Принцип: для каждого w-id указан массив фраз, появление которых однозначно
+// (или с высокой вероятностью) указывает на этот вид работ.
+// Все фразы — в нижнем регистре, без пунктуации, минимум 6-8 символов.
+// ============================================================
+const WORK_KEYS={
+  w1:['устройство оснований фундаментов зданий','устройство оснований и земляных','вертикальная планировка','разработка выемок','устройство насыпей','обратных засыпок','оснований фундаментов и земляных'],
+  w2:['устройство плитных фундаментов','плитных фундаментов','свайных фундаментов','устройство свайных фунд','щелевых фундаментов','фундаментов из готовых сборных свай','фундаментов из буронабивных','фундаментов из набивных свай','устройство ростверка'],
+  w3:['стена в грунте','устройство специальных видов фундаментов','подпорных стен','наружных стен подвалов','буроинъекционных анкеров'],
+  w4:['возведение монолитных бетонных','монолитных бетонных и ж','монолитных бетонных и железобетонных','опалубочные арматурные бетонные','опалубочные работы','арматурные работы','бетонирование'],
+  w5:['монтаж сборных бетонных','сборных бетонных и ж','сборных бетонных и железобетонных','монтаж блоков фундаментов','монтаж ригелей балок','монтаж панелей стен'],
+  w6:['монтаж стальных конструкций','стальных конструкций одноэтажных','стальных конструкций многоэтажных','укрупнительная сборка','подкрановых балок'],
+  w7:['возведение каменных','каменных и армокаменных','кладка из кирпича','стены из мелких блоков'],
+  w8:['монтаж деревянных конструкций','деревянных конструкций'],
+  w9:['монтаж легких ограждающих','легких ограждающих конструкций','гипсобетонных перегородок','каркасно-обшивных перегородок','каркасно обшивных перегородок','стен из металлических панелей','асбестоцементных экструзионных','асбестоцементных панелей'],
+  w10:['устройство антикоррозионных','антикоррозионных покрытий','гуммировочные','металлизационные'],
+  w11:['устройство кровель','кровли из рулонных','кровли из мелкоштучных','кровли из листовой стали','металлической черепицы','металлочерепиц','профнастил'],
+  w12:['устройство изоляционных покрытий','изоляционных покрытий','гидроизоляции из рулонных','окрасочной гидроизоляции','гидроизоляции из цементных','гидроизоляции из металлических','устройство гидроизоляции из рулонных'],
+  w13:['тепловой изоляции наружных ограждающих','тепловой изоляции наружных','системы утепления легкие штукатурные','штукатурные системы утепления','вентилируемые системы утепления','тепловой изоляции надземного','системы утепления крыш','тепловая изоляция наружных ограждающих'],
+  w14:['тепловой изоляции оборудования','тепловой изоляции трубопроводов'],
+  w15:['заполнение оконных','заполнение дверных','оконных и дверных проемов','оконных и дверных проёмов','установка оконных и дверных','устройство монтажных швов','отделка откосов'],
+  w16:['штукатурные работы','штукатурных работ'],
+  w17:['облицовочные работы','облицовочных работ'],
+  w18:['декоративные отделочные','декоративных отделочных'],
+  w19:['малярные работы','малярных работ'],
+  w20:['обойные работы','обойных работ'],
+  w21:['стекольные работы','стекольных работ','стеклоблоков','стеклопакетов'],
+  w22:['устройство полов','устройство грунтового основания','бетонного подстилающего','устройство стяжки','покрытий полов','монолитных покрытий полов','покрытий полов из плиточных','покрытий полов из древесины','самонивелирующихся'],
+  w23:['дорожные одежды','тротуарных плит','бортового камня','тротуарных плит','покрытие из плит тротуарных','тротуарных одежд','с покрытием из тротуарных','устройство сборного покрытия из тротуарных'],
+  w24:['благоустройство территорий озеленение','озеленение территорий','посадка деревьев','создание газонов','создание цветников'],
+  w25:['благоустройство территорий ограды','устройство постоянных оград','устройство временных оград','устройство оград'],
+  w26:['асфальтобетонных покрытий','асфальтобетонных и цементобетонных','устройство асфальтобетонных','покрытием из асфальтобетона','с покрытием из асфальтобетона','покрытие из асфальтобетона'],
+  w27:['холодное и горячее водоснабжение','холодного водоснабжения','горячего водоснабжения','инженерных систем зданий и сооружений водоснабжение','внутренних систем водоснабжения','внутренних инженерных систем зданий и сооружений водоснабжение','водоснабжение и водоотведение'],
+  w28:['канализация и водостоки','канализации и водостоков','системы канализации','инженерных систем зданий и сооружений канализация','внутренних систем канализации','внутренних инженерных систем зданий и сооружений канализация'],
+  w29:['вентиляция и кондиционирование','вентиляции и кондиционирования','инженерных систем зданий и сооружений вентиляция','вентиляция и кондиционирование воздуха','монтаж воздуховодов'],
+  w30:['инженерных систем зданий и сооружений отопление','внутренних систем отопления','внутренние системы отопления','внутренние системы зданий отопление','отопление и теплоснабжение','системы отопления и теплоснабжения','теплоснабжение зданий'],
+  w31:['тепловые пункты и котельные','тепловых пунктов и котельных','системы тепловых пунктов','инженерных систем зданий и сооружений тепловые пункты'],
+  w32:['монтаж приборов учета тепла','монтаж приборов учёта тепла','приборов учета тепла','приборов учёта тепла','установка теплосчетчиков','установка теплосчётчиков'],
+  w33:['наружных сетей и сооружений водоснабжение','монтаж наружных инженерных сетей','наружных сетей водоснабжения','наружных инженерных сетей и сооружений водоснабжение','водоснабжение и канализация','сетей водоснабжения и канализации'],
+  w34:['монтаж тепловых сетей','наружных инженерных сетей и сооружений монтаж тепловых','наружных сетей и сооружений тепловых'],
+  w35:['монтаж внутренних газопровод','внутренних систем газоснабжения','газоснабжение','дымовых труб'],
+  w36:['монтаж наружных газопроводов','наружных газопроводов','сварка пэ газопроводов','сварка стальных газопроводов'],
+  w37:['электромонтажные работы','внутренних систем электромонтажные','электротехнических устройств внутренние','электропроводка','электрическое освещение','заземляющие устройства','электромонтажных работ'],
+  w38:['кабельные линии электропередачи','кабельные линии','воздушные линии электропередач','воздушных линий электропередачи','электротехнических устройств наружные','наружных сетей электроснабжения кабельные','наружных сетей электроснабжения воздушные'],
+  w39:['распределительные устройства и подстанции','распределительных устройств','электроустановки на напряжение','электросетей электроснабжения распределительные','сетей электроснабжения распределительные','электросиловые установки'],
+  w40:['линейно-кабельные сооружения электросвязи','линейно кабельные сооружения','кабельной канализации','оптических сетей','системы кабельного тв','системы кабельного телевидения'],
+  w41:['системы автоматизации','автоматического регулирования','системы контроля управления'],
+  w42:['системы связи и диспетчеризации','стационарной электросвязи','домофонной связи','лвс','диспетчеризация'],
+  w43:['геодезические работы','геодезическая разбивочная','геодезический контроль точности','геодезические исполнительные','исполнительные съемки','исполнительные съёмки'],
+  w44:['монтаж технологического оборудования','технологического оборудования и трубопроводов','аппараты колонного','теплообменные аппараты','перемешивающие устройства','компрессоров и насосов'],
+  w45:['охранной сигнализации','системы охранной','тревожной сигнализации','видеонаблюдения','видеонаблюдени','контроля и управления доступом'],
+  w46:['автоматических установок пожаротушения','пожаротушения','установок пожаротушения','монтаж оросителей','выпускных насадков'],
+  w47:['пожарной сигнализации','спс','монтаж извещателей','системы пожарной сигнализации'],
+  w48:['пожарная автоматика','оповещения и управления эвакуацией','эвакуации людей при пожаре','системы оповещения']
+};
+
+let S={step:0,company:{},appType:'bsc',iso:{consultant:'Клепицкая Виктория Александровна',scope:'выполнение функций генерального подрядчика, производство строительно-монтажных работ',yearImplemented:'2026',subdivisions:'нет',prevCert:'нет'},cert:{standard:'',productName:'',tnved:'',okp:'',production:'Серийно',scheme:'1С'},spk:{headPosition:'',headName:''},sw:new Set(),responsible:{},bxS:'',bxR:[],bxL:false,gen:false,done:false,ws:'',kpMsg:'',kpRawText:'',kpProgress:'',docConfirm:null};
 
 // ===================== OCR (Tesseract.js) =====================
 // Global OCR worker for KP PDF parsing. Loaded on app startup.
@@ -308,26 +373,43 @@ async function genBISP(co,spk,sw,r){
   return await zip.generateAsync({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
 }
 
-// KP PARSER - auto-select work types from commercial proposal
-// Supports both .docx (text) and PDF (OCR via Tesseract.js).
-// Priority: explicit w-codes (w14, w17...) in the text. Fallback: keyword matching.
+// ============================================================
+// УНИВЕРСАЛЬНЫЙ ПАРСЕР ДОКУМЕНТОВ (КП, СПК, договоры)
+// Поддерживает .docx, .doc, PDF, JPG, PNG, HEIC.
+// 
+// Логика:
+// 1. extractDocText(file) — извлекает текст из файла (DOCX → mammoth, PDF → pdf.js+OCR, изображения → OCR)
+// 2. detectDocType(text) — определяет тип документа: 'kp' (КП с w-кодами) или 'spk' (СПК со списком работ) или 'unknown'
+// 3. analyzeWorkTypes(text, type) — возвращает массив найденных видов работ с уровнем уверенности
+// 4. handleDoc(file) — оркестрирует процесс, показывает диалог подтверждения эксперту
+// ============================================================
 
-// Read text from a KP file. Returns full extracted text string.
-async function extractKpText(file,onProgress){
+// Нормализация текста: lowercase, замена ё→е, замена непечатных символов на пробел, схлопывание пробелов.
+// Это важно для надёжного matching текста после OCR.
+function normText(t){
+  return (t||'')
+    .toLowerCase()
+    .replace(/ё/g,'е')
+    .replace(/[^\p{L}\p{N}\s]+/gu,' ')  // оставляем только буквы, цифры и пробелы
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+// Извлечь текст из файла. Поддерживает docx, pdf, изображения.
+async function extractDocText(file,onProgress){
   const name=(file.name||'').toLowerCase();
-  // DOCX path - same as before, use mammoth
+  // DOCX/DOC
   if(name.endsWith('.docx')||name.endsWith('.doc')){
     onProgress&&onProgress('Читаю .docx…');
     const buf=await file.arrayBuffer();
     const result=await mammoth.extractRawText({arrayBuffer:buf});
     return result.value||'';
   }
-  // PDF path - rasterize each page and OCR it
+  // PDF
   if(name.endsWith('.pdf')){
     if(!ocrReady){
       if(ocrError)throw new Error('OCR недоступен: '+ocrError);
       onProgress&&onProgress('Жду загрузку OCR…');
-      // wait up to 60s for OCR to be ready
       const start=Date.now();
       while(!ocrReady){
         if(ocrError)throw new Error('OCR недоступен: '+ocrError);
@@ -339,119 +421,210 @@ async function extractKpText(file,onProgress){
     const buf=await file.arrayBuffer();
     const pdf=await pdfjsLib.getDocument({data:buf}).promise;
     let fullText='';
+    // Сначала попробуем извлечь встроенный текст (для PDF с реальным текстом)
+    let embeddedTextLen=0;
     for(let i=1;i<=pdf.numPages;i++){
-      onProgress&&onProgress(`Распознаю стр. ${i}/${pdf.numPages}…`);
       const page=await pdf.getPage(i);
-      const viewport=page.getViewport({scale:2.0});
-      const canvas=document.createElement('canvas');
-      canvas.width=viewport.width;canvas.height=viewport.height;
-      await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
-      const r=await ocrWorker.recognize(canvas);
-      fullText+='\n--- Страница '+i+' ---\n'+(r.data&&r.data.text||'');
+      const tc=await page.getTextContent();
+      const pageText=tc.items.map(it=>it.str).join(' ');
+      embeddedTextLen+=pageText.length;
+      fullText+='\n'+pageText;
+    }
+    // Если встроенного текста почти нет — это скан, используем OCR
+    if(embeddedTextLen<100){
+      fullText='';
+      for(let i=1;i<=pdf.numPages;i++){
+        onProgress&&onProgress(`Распознаю стр. ${i}/${pdf.numPages}…`);
+        const page=await pdf.getPage(i);
+        const viewport=page.getViewport({scale:2.5}); // увеличиваем разрешение для лучшего OCR
+        const canvas=document.createElement('canvas');
+        canvas.width=viewport.width;canvas.height=viewport.height;
+        await page.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
+        const r=await ocrWorker.recognize(canvas);
+        fullText+='\n--- Страница '+i+' ---\n'+(r.data&&r.data.text||'');
+      }
+    } else {
+      onProgress&&onProgress('Текст извлечён из PDF (без OCR)');
     }
     return fullText;
   }
-  throw new Error('Поддерживаются только файлы .docx и .pdf');
+  // Изображения (JPG, PNG, HEIC, etc.)
+  if(/\.(jpe?g|png|webp|bmp|gif|tiff?|heic|heif)$/i.test(name)){
+    if(!ocrReady){
+      if(ocrError)throw new Error('OCR недоступен: '+ocrError);
+      onProgress&&onProgress('Жду загрузку OCR…');
+      const start=Date.now();
+      while(!ocrReady){
+        if(ocrError)throw new Error('OCR недоступен: '+ocrError);
+        if(Date.now()-start>60000)throw new Error('OCR не загрузился за 60 сек.');
+        await new Promise(r=>setTimeout(r,500));
+      }
+    }
+    onProgress&&onProgress('Распознаю изображение…');
+    // Загружаем картинку в canvas (Tesseract автоматически делает это, но мы хотим контроль размера)
+    const url=URL.createObjectURL(file);
+    try{
+      const img=new Image();
+      await new Promise((res,rej)=>{img.onload=res;img.onerror=()=>rej(new Error('Не удалось открыть изображение. Возможно, формат HEIC не поддерживается этим браузером — конвертируйте в JPG.'));img.src=url});
+      const c=document.createElement('canvas');
+      // upscale небольших картинок до минимум 1500px по большей стороне
+      const minSide=1500;
+      let w=img.width,h=img.height;
+      if(Math.max(w,h)<minSide){
+        const k=minSide/Math.max(w,h);
+        w=Math.round(w*k);h=Math.round(h*k);
+      }
+      c.width=w;c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      const r=await ocrWorker.recognize(c);
+      return r.data&&r.data.text||'';
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  throw new Error('Поддерживаются .docx, .pdf, .jpg, .png, .webp, .heic');
 }
 
-// Extract w-codes (w14, w17, w30…) from text. Returns Set of valid w-codes from our catalog.
-function extractWCodes(text){
+// Определить тип документа по содержанию текста.
+// Возвращает 'kp', 'spk' или 'unknown'.
+function detectDocType(text){
+  const t=text.toLowerCase();
+  // КП — наш собственный формат от MAVIS GROUP, всегда содержит «коммерческое предложение» и/или «mavis group»
+  if(t.includes('коммерческое предложение')||t.includes('mavis group')||t.includes('mavis')||t.includes('мавис')||t.includes('виды работ для спк')||t.includes('наши услуги'))return 'kp';
+  // СПК — свидетельство о технической компетентности
+  if(t.includes('свидетельство о технической компетентности')||t.includes('свидетельства о технической компетентности')||t.includes('область технической компетентности')||t.includes('к свидетельству')||t.includes('система производственного контроля')||t.includes('производственного контроля'))return 'spk';
+  return 'unknown';
+}
+
+// Найти w-коды в тексте КП. Учитывает OCR-ошибки.
+function findWCodes(text){
   const matched=new Set();
+  const evidence={}; // wid → массив найденных строк (для отладки)
   const validIds=new Set(W.map(w=>w.id));
-  // Regex: w followed by 1-3 digits, with word boundary. Case-insensitive.
-  // Also accept "и/или" mistakes from OCR like "ш14"/"и14" - try those too.
-  const re=/[wWшИиH][\s]?(\d{1,3})\b/g;
+  // Регулярки: w[14], W[14], w 14, w.14, w,14, w-14, vv14, ww14
+  // Без \b — кириллица его ломает в JS. Вместо границы — требуем что после цифр НЕ идёт цифра.
+  const patterns=[
+    /\b[wWвВuvшИи]{1,2}[\s.,\-:]*(\d{1,3})(?!\d)/g,
+    /(?:^|[\s;,(])(\d{1,3})(?=[\s.,)])/g // числа сами по себе — слабый сигнал, используем только в крайнем случае
+  ];
+  // Используем только первый pattern для уверенного matching
+  const re=/[wWвВuvшИиH]{1,2}[\s.,\-:]*(\d{1,3})(?!\d)/g;
   let m;
   while((m=re.exec(text))!==null){
-    const id='w'+m[1];
-    if(validIds.has(id))matched.add(id);
+    const num=parseInt(m[1],10);
+    const id='w'+num;
+    if(validIds.has(id)){
+      matched.add(id);
+      if(!evidence[id])evidence[id]=[];
+      // Сохраним маленький контекст
+      const start=Math.max(0,m.index-5);
+      const end=Math.min(text.length,m.index+m[0].length+30);
+      evidence[id].push(text.substring(start,end).replace(/\s+/g,' ').trim());
+    }
   }
-  return matched;
+  return {matched,evidence};
 }
 
-// Fallback: keyword-based matching (used when no w-codes found)
-function keywordMatchKP(text){
-  const lower=text.toLowerCase();
-  const kwMap={
-w1:['земляных сооружений','вертикальная планировка','котлованов','водопонижение','насыпей'],
-w2:['плитных фундаментов','свайных фундаментов','щелевых фундаментов'],
-w3:['стена в грунте'],
-w4:['монолитных бетонных','опалубочные','арматурные','бетонные работы','бетонирован'],
-w5:['сборных бетонных','монтаж блоков фундаментов','монтаж колонн','монтаж ригелей','монтаж панелей'],
-w6:['стальных конструкций','монтаж подкрановых','укрупнительная сборка'],
-w7:['каменных','армокаменных','кладка из кирпича','стены из мелких блоков'],
-w8:['деревянных конструкций'],
-w9:['легких ограждающих','гипсобетонных перегородок','каркасно-обшивных'],
-w10:['антикоррозионных покрытий','лакокрасочные','гуммировочные','металлизационные'],
-w11:['устройство кровель','кровли из рулонных','кровли из мелкоштучных','металлочерепиц'],
-w12:['изоляционные покрытия','гидроизоляци'],
-w13:['тепловой изоляции наружных','штукатурных систем утепления','вентилируемых систем утепления'],
-w14:['тепловой изоляции оборудования','тепловой изоляции трубопроводов'],
-w15:['оконных и дверных проёмов','оконных и дверных проемов','оконных проёмов','дверных проёмов','заполнение оконных','заполнение дверных','устройство откосов'],
-w16:['штукатурных работ','штукатурные работы'],
-w17:['облицовочных работ','облицовочные работы'],
-w18:['декоративных отделочных','декоративные отделочные'],
-w19:['малярных работ','малярные работы'],
-w20:['обойных работ','обойные работы'],
-w21:['стекольных работ','стекольные работы'],
-w22:['устройство полов','устройство грунтового основания','устройство стяжки','гидроизоляции пола','покрытий полов','плиточных материалов','самонивелирующихся'],
-w23:['дорожных одежд','плит тротуарных','бортового камня'],
-w24:['озеленение','посадка деревьев','создание газонов','создание цветников'],
-w25:['устройство оград','временных оград','постоянных оград'],
-w26:['асфальтобетонных покрытий'],
-w27:['холодное и горячее водоснабжение','холодного водоснабжения','горячего водоснабжения'],
-w28:['канализация и водостоки','канализации'],
-w29:['вентиляция и кондиционирование','вентиляци','кондиционирован'],
-w30:['отопление','теплоснабжение'],
-w31:['тепловые пункты','котельные'],
-w32:['приборов учёта тепла','приборов учета тепла'],
-w33:['наружных сетей водоснабжения','наружных сетей канализации'],
-w34:['тепловых сетей'],
-w35:['газоснабжение','газоснабжения'],
-w36:['наружных газопроводов'],
-w37:['электротехнических устройств','электропроводка','электрическое освещение'],
-w38:['кабельные линии','воздушные линии электропередачи'],
-w39:['электроустановки на напряжение'],
-w40:['кабельные сооружения электросвязи','прокладка кабелей'],
-w41:['системы автоматизации','автоматического регулирования'],
-w42:['системы связи','диспетчеризаци','домофонной связи','кабельного телевидения'],
-w43:['геодезические работы','геодезическ'],
-w44:['технологического оборудования','монтаж компрессоров','монтаж насосов','монтаж фильтров'],
-w45:['охранной сигнализации','видеонаблюдени','контроля и управления доступом','тревожной сигнализации'],
-w46:['пожаротушени','установок пожаротушения','автоматических установок'],
-w47:['пожарной сигнализации','спс','извещателей'],
-w48:['пожарная автоматика','оповещения и управления эвакуацией']
-  };
-  const matched=new Set();
-  for(const[wid,keywords]of Object.entries(kwMap)){
-    if(keywords.some(kw=>lower.includes(kw)))matched.add(wid);
-  }
-  if(lower.includes('отделочные работы')){['w16','w17','w18','w19','w20','w21'].forEach(id=>matched.add(id))}
-  return matched;
-}
-
-async function handleKP(file){
-  if(!file)return;
-  S.kpMsg='';S.kpRawText='';S.kpProgress='⏳ Начинаю обработку…';render();
-  try{
-    const text=await extractKpText(file,(msg)=>{S.kpProgress='⏳ '+msg;render()});
-    // First try w-codes (more reliable)
-    const byCode=extractWCodes(text);
-    if(byCode.size>0){
-      byCode.forEach(id=>S.sw.add(id));
-      S.kpMsg='✅ Из КП найдено кодов работ: '+byCode.size+(file.name.toLowerCase().endsWith('.pdf')?' (распознано через OCR)':'');
-      S.kpRawText='';
-    } else {
-      // Fallback to keyword matching
-      const byKw=keywordMatchKP(text);
-      if(byKw.size>0){
-        byKw.forEach(id=>S.sw.add(id));
-        S.kpMsg='✅ Из КП подобрано работ по ключевым словам: '+byKw.size+' (w-коды не найдены)';
-        S.kpRawText='';
-      } else {
-        S.kpMsg='⚠️ Не удалось автоматически распознать виды работ. Распознанный текст ниже — отметьте нужные виды вручную.';
-        S.kpRawText=text.substring(0,3000)+(text.length>3000?'\n…(обрезано)':'');
+// Найти виды работ по ключевым фразам в тексте (для СПК и как fallback для КП).
+// Возвращает массив {id, confidence: 'high'|'med', matchedKey, context}
+function findByKeyPhrases(text){
+  const norm=normText(text);
+  const results=[];
+  for(const [wid,keys] of Object.entries(WORK_KEYS)){
+    let bestKey=null;
+    let bestLen=0;
+    for(const key of keys){
+      const normKey=normText(key);
+      if(norm.includes(normKey)){
+        if(normKey.length>bestLen){bestLen=normKey.length;bestKey=normKey}
       }
+    }
+    if(bestKey){
+      // Уверенность зависит от длины ключевой фразы
+      const conf=bestLen>=20?'high':'med';
+      // Найдём контекст в исходном тексте
+      const idx=norm.indexOf(bestKey);
+      const ctxStart=Math.max(0,idx-10);
+      const ctxEnd=Math.min(norm.length,idx+bestKey.length+20);
+      const context=norm.substring(ctxStart,ctxEnd);
+      results.push({id:wid,confidence:conf,matchedKey:bestKey,context});
+    }
+  }
+  return results;
+}
+
+// Анализирует распознанный текст. Возвращает {type, found: [{id, confidence, evidence}], rawText}
+function analyzeDoc(text){
+  const type=detectDocType(text);
+  let found=[];
+  if(type==='kp'){
+    // Для КП — основной сигнал w-коды, плюс перекрёстная проверка по ключевым фразам.
+    const {matched,evidence}=findWCodes(text);
+    const byKeys=findByKeyPhrases(text);
+    const byKeysMap={};
+    byKeys.forEach(r=>byKeysMap[r.id]=r);
+    // Включаем все найденные по w-коду
+    matched.forEach(id=>{
+      const keyMatch=byKeysMap[id];
+      // Если найден и w-код и ключевая фраза — high confidence
+      const conf=keyMatch?'high':'med';
+      const ev=(evidence[id]||[]).slice(0,2).join(' | ')+(keyMatch?' | "'+keyMatch.context+'"':'');
+      found.push({id,confidence:conf,evidence:ev});
+    });
+    // Если по ключевой фразе нашлась high-confidence — добавим даже если w-код не нашёлся
+    byKeys.forEach(r=>{
+      if(r.confidence==='high' && !matched.has(r.id)){
+        found.push({id:r.id,confidence:'med',evidence:'по ключевой фразе: "'+r.context+'"'});
+      }
+    });
+  } else if(type==='spk'){
+    // СПК — только по ключевым фразам.
+    const byKeys=findByKeyPhrases(text);
+    byKeys.forEach(r=>{
+      found.push({id:r.id,confidence:r.confidence,evidence:'"'+r.context+'"'});
+    });
+  } else {
+    // unknown — пробуем оба способа, но с пометкой
+    const {matched,evidence}=findWCodes(text);
+    matched.forEach(id=>found.push({id,confidence:'med',evidence:(evidence[id]||[]).slice(0,2).join(' | ')}));
+    if(found.length===0){
+      const byKeys=findByKeyPhrases(text);
+      byKeys.forEach(r=>found.push({id:r.id,confidence:r.confidence,evidence:'"'+r.context+'"'}));
+    }
+  }
+  // Сортируем по id (w1, w2, ...)
+  found.sort((a,b)=>parseInt(a.id.substring(1),10)-parseInt(b.id.substring(1),10));
+  return {type,found,rawText:text};
+}
+
+// Основной обработчик: загружает файл, анализирует, готовит диалог подтверждения.
+async function handleDoc(file){
+  if(!file)return;
+  S.kpMsg='';S.kpRawText='';S.kpProgress='⏳ Начинаю обработку…';S.docConfirm=null;render();
+  try{
+    const text=await extractDocText(file,(msg)=>{S.kpProgress='⏳ '+msg;render()});
+    const analysis=analyzeDoc(text);
+    const typeLabel=analysis.type==='kp'?'Коммерческое предложение (КП)':(analysis.type==='spk'?'Свидетельство о технич. компетентности (СПК)':'Документ');
+    if(analysis.found.length===0){
+      S.kpMsg='⚠️ Тип документа: '+typeLabel+'. Виды работ не распознаны. Распознанный текст ниже — отметьте нужные виды вручную.';
+      S.kpRawText=text.substring(0,4000)+(text.length>4000?'\n…(обрезано)':'');
+      S.docConfirm=null;
+    } else {
+      // Готовим объект для диалога подтверждения. По умолчанию high-confidence — отмечены, med — нет.
+      S.docConfirm={
+        type:analysis.type,
+        typeLabel:typeLabel,
+        fileName:file.name,
+        items:analysis.found.map(r=>({
+          id:r.id,
+          confidence:r.confidence,
+          evidence:r.evidence,
+          // Авто-отмечены только те, в чём уверенны
+          checked:r.confidence==='high'
+        })),
+        rawText:text
+      };
+      S.kpMsg='';
     }
   }catch(e){
     console.error(e);
@@ -461,12 +634,41 @@ async function handleKP(file){
   render();
 }
 
+// Принять выбор эксперта из диалога подтверждения.
+function confirmDoc(){
+  if(!S.docConfirm)return;
+  let added=0;
+  S.docConfirm.items.forEach(it=>{
+    if(it.checked){S.sw.add(it.id);added++}
+  });
+  S.kpMsg='✅ Из документа добавлено видов работ: '+added+' (тип: '+S.docConfirm.typeLabel+')';
+  S.docConfirm=null;
+  render();
+}
+function cancelDoc(){S.docConfirm=null;render()}
+// Переключение чекбокса в диалоге без полного re-render
+function toggleDocItem(idx){
+  if(!S.docConfirm||!S.docConfirm.items[idx])return;
+  S.docConfirm.items[idx].checked=!S.docConfirm.items[idx].checked;
+  const cb=document.querySelector(`[data-dc-idx="${idx}"]`);
+  if(cb)cb.checked=S.docConfirm.items[idx].checked;
+  // обновим счётчик
+  const cnt=document.getElementById('dcCount');
+  if(cnt)cnt.textContent=S.docConfirm.items.filter(i=>i.checked).length;
+}
+function selectAllDocItems(check){
+  if(!S.docConfirm)return;
+  S.docConfirm.items.forEach(it=>it.checked=check);
+  render();
+}
+
+
 // RENDER
 function render(){document.getElementById('stepsBar').innerHTML=STEPS.map((n,i)=>`<div class="step-item ${S.step===i?'active':''} ${S.step>i?'done':''}" onclick="if(${i}<=${S.step}){S.step=${i};render()}">${n}</div>`).join('');const el=document.getElementById('app');[rUpload,rCompany,rType,rParams,rGenerate][S.step](el)}
 
 function rUpload(el){
 // Reset all data for new application
-S.company={};S.iso={consultant:'Клепицкая Виктория Александровна',scope:'выполнение функций генерального подрядчика, производство строительно-монтажных работ',yearImplemented:'2026',subdivisions:'нет',prevCert:'нет'};S.cert={standard:'',productName:'',tnved:'',okp:'',production:'Серийно',scheme:'1С'};S.spk={headPosition:'',headName:''};S.sw=new Set();S.responsible={};S.bxS='';S.bxR=[];S.bxL=false;S.gen=false;S.done=false;S.ws='';S.kpMsg='';S.kpRawText='';S.kpProgress='';
+S.company={};S.iso={consultant:'Клепицкая Виктория Александровна',scope:'выполнение функций генерального подрядчика, производство строительно-монтажных работ',yearImplemented:'2026',subdivisions:'нет',prevCert:'нет'};S.cert={standard:'',productName:'',tnved:'',okp:'',production:'Серийно',scheme:'1С'};S.spk={headPosition:'',headName:''};S.sw=new Set();S.responsible={};S.bxS='';S.bxR=[];S.bxL=false;S.gen=false;S.done=false;S.ws='';S.kpMsg='';S.kpRawText='';S.kpProgress='';S.docConfirm=null;
 el.innerHTML=`<div class="upload-zone" id="dz" onclick="document.getElementById('fi').click()"><input type="file" id="fi" accept=".docx" hidden><div class="upload-icon">📄</div><div class="upload-title">Загрузите счёт-заказ или договор</div><div class="upload-sub">Перетащите .docx файл или нажмите для выбора</div></div><div id="us"></div><div style="text-align:center;margin-top:12px"><button class="btn btn-s" onclick="S.step=1;render()">Пропустить (ввести вручную)</button></div>`;const z=document.getElementById('dz'),fi=document.getElementById('fi');z.ondragover=e=>{e.preventDefault();z.classList.add('drag')};z.ondragleave=()=>z.classList.remove('drag');z.ondrop=e=>{e.preventDefault();z.classList.remove('drag');doFile(e.dataTransfer.files[0])};fi.onchange=()=>doFile(fi.files[0])}
 async function doFile(f){if(!f)return;document.getElementById('us').innerHTML='<div style="text-align:center;padding:20px"><div class="spin"></div>Извлекаю реквизиты...</div>';try{S.company=await parseInvoice(f);if(S.company.directorName)S.iso.representative=(S.company.directorPosition||'Директор')+' '+S.company.directorName;S.step=1;render()}catch(e){document.getElementById('us').innerHTML='<div class="status err">Ошибка: '+e.message+'</div>'}}
 
@@ -477,7 +679,7 @@ function rType(el){el.innerHTML=`<div class="card"><div class="card-title">📝 
 function rParams(el){const f=(o,k,l,fw,ph)=>`<div class="field ${fw?'fw':''}"><label>${l}</label><input type="text" value="${E(S[o][k]||'')}" placeholder="${ph||''}" onchange="S['${o}']['${k}']=this.value"></div>`;const isI=S.appType==='bsc'||S.appType==='beltechexpert',isC=S.appType==='cert_metal',isS=S.appType==='stroycomplex'||S.appType==='bisp';
 const iH=isI?`<div class="card"><div class="card-title">📊 Сведения о системе менеджмента</div><div class="fg">${f('iso','yearImplemented','Год внедрения',0,'2026')}${f('iso','employeeCount','Количество работников',0,'15')}${f('iso','scope','Область применения',1,'производство строительно-монтажных работ')}${f('iso','consultant','Консультирование проводил',1,'Клепицкая Виктория Александровна')}${f('iso','subdivisions','Наличие обособленных подразделений',0,'нет')}${f('iso','prevCert','Предыдущий сертификат',0,'нет')}${f('iso','representative','Представитель руководства',1,'')}${f('iso','contactPerson','Контактное лицо',0,'')}${f('iso','contactPhone','Телефон контактного лица',0,'')}</div></div>`:'';
 const cH=isC?`<div class="card"><div class="card-title">⚙️ Данные для сертификации продукции</div><div class="fg"><div class="field fw"><label>Стандарт</label><select onchange="selStd(this.value)"><option value="">Выберите...</option>${CERTS.map(s=>`<option value="${s.id}" ${S.cert.standard===s.id?'selected':''}>${s.label} — ${s.fn}</option>`).join('')}</select></div>${f('cert','productName','Наименование продукции',1)}${f('cert','tnved','Код ТН ВЭД ЕАЭС')}${f('cert','okp','Код ОКП РБ')}<div class="field"><label>Выпускается</label><select onchange="S.cert.production=this.value"><option ${S.cert.production==='Серийно'?'selected':''}>Серийно</option><option ${S.cert.production==='Партия'?'selected':''}>Партия</option><option ${S.cert.production==='Единичное изделие'?'selected':''}>Единичное изделие</option></select></div>${f('cert','scheme','Схема сертификации',0,'1С')}</div></div>`:'';
-const sH=isS?`<div class="card"><div class="card-title">📑 Дополнительные данные для СПК</div><div class="fg">${f('spk','headPosition','Должность руководителя',0,'Директор')}${f('spk','headName','ФИО руководителя',0,'')}</div></div><div class="card"><div class="card-title">🔧 Виды работ (<span id="swCount">${S.sw.size}</span> из ${W.length})</div><div class="card-sub">Выберите вручную или загрузите КП для автоподбора. Поддерживаются .docx и .pdf (PDF читается через OCR).</div><div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap"><button class="btn-bx" onclick="document.getElementById('kpFile').click()" style="background:#7c3aed">📄 Загрузить КП</button><input type="file" id="kpFile" accept=".docx,.pdf" hidden onchange="handleKP(this.files[0]);this.value=''"><button class="btn-bx" onclick="selectAllVisible()" style="background:#059669">✓ Выбрать все</button><button class="btn-bx" onclick="clearAllWorks()" style="background:#94a3b8">Сбросить все</button>${S.kpMsg?'<span style="font-size:13px;color:'+(S.kpMsg.startsWith('❌')?'#dc2626':(S.kpMsg.startsWith('⚠️')?'#a16207':'#059669'))+';font-weight:500;flex-basis:100%">'+E(S.kpMsg)+'</span>':''}</div>${S.kpProgress?'<div class="kp-progress">'+E(S.kpProgress)+'</div>':''}${S.kpRawText?'<div class="kp-raw-text"><b>Распознанный текст:</b>\n'+E(S.kpRawText)+'</div>':''}<input class="search-input" placeholder="🔍 Поиск..." value="${E(S.ws)}" oninput="S.ws=this.value;renderWtList()"><div class="wt-list" id="wtList">${renderWtItems()}</div><div class="wt-count" id="wtCount">Выбрано: ${S.sw.size} из ${W.length}</div></div>`:'';
+const sH=isS?`<div class="card"><div class="card-title">📑 Дополнительные данные для СПК</div><div class="fg">${f('spk','headPosition','Должность руководителя',0,'Директор')}${f('spk','headName','ФИО руководителя',0,'')}</div></div><div class="card"><div class="card-title">🔧 Виды работ (<span id="swCount">${S.sw.size}</span> из ${W.length})</div><div class="card-sub">Выберите вручную или загрузите документ для автоподбора. Поддерживаются: КП (.docx, .pdf), СПК — свидетельство о технич. компетентности (.pdf, .jpg, .png). Приложение само определит тип документа.</div><div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap"><button class="btn-bx" onclick="document.getElementById('kpFile').click()" style="background:#7c3aed">📄 Загрузить КП или СПК</button><input type="file" id="kpFile" accept=".docx,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.heic,.heif" hidden onchange="handleDoc(this.files[0]);this.value=''"><button class="btn-bx" onclick="selectAllVisible()" style="background:#059669">✓ Выбрать все</button><button class="btn-bx" onclick="clearAllWorks()" style="background:#94a3b8">Сбросить все</button>${S.kpMsg?'<span style="font-size:13px;color:'+(S.kpMsg.startsWith('❌')?'#dc2626':(S.kpMsg.startsWith('⚠️')?'#a16207':'#059669'))+';font-weight:500;flex-basis:100%">'+E(S.kpMsg)+'</span>':''}</div>${S.kpProgress?'<div class="kp-progress">'+E(S.kpProgress)+'</div>':''}${S.docConfirm?renderDocConfirm():''}${S.kpRawText?'<div class="kp-raw-text"><b>Распознанный текст:</b>\n'+E(S.kpRawText)+'</div>':''}<input class="search-input" placeholder="🔍 Поиск..." value="${E(S.ws)}" oninput="S.ws=this.value;renderWtList()"><div class="wt-list" id="wtList">${renderWtItems()}</div><div class="wt-count" id="wtCount">Выбрано: ${S.sw.size} из ${W.length}</div></div>`:'';
 const bxH=S.bxR.length>0?`<div style="margin-top:8px;border:1px solid #e2e8f0;border-radius:7px;max-height:150px;overflow-y:auto">${S.bxR.map(u=>`<div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:13px;display:flex;justify-content:space-between" onclick="S.responsible.name='${E(u.name)}';S.responsible.phone='${E(u.phone)}';S.bxR=[];render()"><span>${u.name}</span><span style="color:#64748b">${u.phone}</span></div>`).join('')}</div>`:'';
 el.innerHTML=`${iH}${cH}${sH}<div class="card"><div class="card-title">👤 Ответственный исполнитель</div><div class="card-sub">Найдите в Битрикс24 или введите вручную</div><div class="bx-row"><input type="text" value="${E(S.bxS)}" placeholder="Имя сотрудника..." oninput="S.bxS=this.value"><button class="btn-bx" onclick="doBx()" ${S.bxL?'disabled':''}>${S.bxL?'⏳':'🔍 Найти'}</button></div>${bxH}<div class="fg" style="margin-top:10px">${f('responsible','name','ФИО ответственного')}${f('responsible','phone','Телефон ответственного')}</div></div><div class="actions"><button class="btn btn-s" onclick="S.step=2;render()">← Назад</button><button class="btn btn-p" onclick="S.step=4;render()">Далее →</button></div>`}
 
@@ -507,7 +709,39 @@ function tgW(id){
 // Select all currently-visible (filtered) work types.
 function selectAllVisible(){filteredWorks().forEach(w=>S.sw.add(w.id));renderWtList();const c1=document.getElementById('swCount');if(c1)c1.textContent=S.sw.size;const c2=document.getElementById('wtCount');if(c2)c2.textContent='Выбрано: '+S.sw.size+' из '+W.length}
 // Clear all selections.
-function clearAllWorks(){S.sw.clear();S.kpMsg='';S.kpRawText='';renderWtList();const c1=document.getElementById('swCount');if(c1)c1.textContent=S.sw.size;const c2=document.getElementById('wtCount');if(c2)c2.textContent='Выбрано: '+S.sw.size+' из '+W.length;render()}
+function clearAllWorks(){S.sw.clear();S.kpMsg='';S.kpRawText='';S.docConfirm=null;renderWtList();const c1=document.getElementById('swCount');if(c1)c1.textContent=S.sw.size;const c2=document.getElementById('wtCount');if(c2)c2.textContent='Выбрано: '+S.sw.size+' из '+W.length;render()}
+
+// renderDocConfirm — карточка с найденными в документе видами работ и галочками для подтверждения.
+// Каждый элемент: чекбокс + название работ + индикатор уверенности + контекст из текста.
+// Кнопки: «Добавить выбранные», «Отмена», «Выбрать все», «Снять все».
+function renderDocConfirm(){
+  if(!S.docConfirm)return '';
+  const dc=S.docConfirm;
+  const checkedCount=dc.items.filter(i=>i.checked).length;
+  const itemsHtml=dc.items.map((it,idx)=>{
+    const w=W.find(x=>x.id===it.id);
+    if(!w)return '';
+    const confColor=it.confidence==='high'?'#059669':'#a16207';
+    const confLabel=it.confidence==='high'?'высокая уверенность':'возможно';
+    const confBg=it.confidence==='high'?'#d1fae5':'#fef3c7';
+    return `<div class="dc-item"><input type="checkbox" ${it.checked?'checked':''} data-dc-idx="${idx}" onchange="toggleDocItem(${idx})"><div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-weight:600;font-size:13px">${E(w.c)}</span><span style="font-size:11px;background:${confBg};color:${confColor};padding:2px 7px;border-radius:10px;font-weight:500">${confLabel}</span></div><div style="font-size:11px;color:#64748b;margin-top:3px;font-style:italic">📝 ${E(it.evidence||'')}</div></div></div>`;
+  }).join('');
+  return `<div class="doc-confirm-card">
+    <div class="dc-header">
+      <div><b>📋 Найдено в документе:</b> ${E(dc.typeLabel)}</div>
+      <div style="font-size:12px;color:#64748b;margin-top:2px">${E(dc.fileName||'')} → видов работ: <span id="dcCount">${checkedCount}</span> из ${dc.items.length}</div>
+    </div>
+    <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap">
+      <button class="btn-bx" onclick="selectAllDocItems(true)" style="background:#059669;font-size:12px;padding:4px 10px">✓ Все</button>
+      <button class="btn-bx" onclick="selectAllDocItems(false)" style="background:#94a3b8;font-size:12px;padding:4px 10px">Снять все</button>
+    </div>
+    <div class="dc-list">${itemsHtml}</div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn-bx" onclick="confirmDoc()" style="background:#2563eb">✓ Добавить выбранные</button>
+      <button class="btn-bx" onclick="cancelDoc()" style="background:#94a3b8">Отмена</button>
+    </div>
+  </div>`;
+}
 function selStd(id){S.cert.standard=id;const s=CERTS.find(x=>x.id===id);if(s){S.cert.productName=s.prod;S.cert.tnved=s.tv;S.cert.okp=s.okp}render()}
 async function doBx(){if(!S.bxS||S.bxS.length<2)return;S.bxL=true;render();S.bxR=await searchUsers(S.bxS);S.bxL=false;render()}
 async function doGen(){S.gen=true;S.done=false;render();try{let doc,pfx='Заявка',isTemplate=false;if(S.appType==='bsc'){doc=genBSC(S.company,S.iso,S.responsible);pfx='Заявка_БСЦ'}else if(S.appType==='beltechexpert'){doc=genBTE(S.company,S.iso,S.responsible);pfx='Заявка_БелТехЭкспертиза'}else if(S.appType==='cert_metal'){const blob=await genCertFromTemplate(S.company,S.cert,S.responsible);pfx='Заявка_серт_'+(CERTS.find(s=>s.id===S.cert.standard)?.label||'').replace(/\s/g,'_');saveAs(blob,pfx+'_'+(S.company.companyName||'').replace(/[«»"']/g,'').substring(0,30)+'.docx');S.done=true;S.gen=false;render();return}else if(S.appType==='stroycomplex'){doc=genSK(S.company,S.spk,S.sw,S.responsible);pfx='Заявка_Стройкомплекс_СПК'}else if(S.appType==='bisp'){const blob=await genBISP(S.company,S.spk,S.sw,S.responsible);pfx='Заявка_БИСП_СПК';saveAs(blob,pfx+'_'+(S.company.companyName||'').replace(/[«»"']/g,'').substring(0,30)+'.docx');S.done=true;S.gen=false;render();return}const buf=await docx.Packer.toBlob(doc);saveAs(buf,pfx+'_'+(S.company.companyName||'').replace(/[«»"']/g,'').substring(0,30)+'.docx');S.done=true}catch(e){alert('Ошибка: '+e.message)}S.gen=false;render()}
