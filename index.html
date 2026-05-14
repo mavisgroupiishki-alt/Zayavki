@@ -67,6 +67,7 @@
 <button class="mod-tab active" id="tabZayavki" onclick="switchModule('zayavki')">📋 Заявки</button>
 <button class="mod-tab" id="tabScan" onclick="switchModule('scan')">🔍 Сканы</button>
 <button class="mod-tab" id="tabDiplom" onclick="switchModule('diplom')">🎓 Дипломы</button>
+<button class="mod-tab" id="tabClients" onclick="switchModule('clients')">👥 Клиенты</button>
 </div>
 </div>
 <div id="moduleZayavki">
@@ -77,6 +78,9 @@
 </div>
 <div id="moduleDiplom" style="display:none">
 <div class="content" id="diplomApp"></div>
+</div>
+<div id="moduleClients" style="display:none">
+<div class="content" id="clientsApp"></div>
 </div>
 <div class="ocr-banner hidden" id="ocrBanner"><span class="ocr-banner-spin" id="ocrSpin"></span><span id="ocrStatus">Загрузка OCR…</span><button id="ocrHideBtn" onclick="document.getElementById('ocrBanner').classList.add('hidden')" style="display:none">✕</button></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
@@ -765,11 +769,14 @@ function switchModule(mod){
   document.getElementById('moduleZayavki').style.display=mod==='zayavki'?'':'none';
   document.getElementById('moduleScan').style.display=mod==='scan'?'':'none';
   document.getElementById('moduleDiplom').style.display=mod==='diplom'?'':'none';
+  document.getElementById('moduleClients').style.display=mod==='clients'?'':'none';
   document.getElementById('tabZayavki').classList.toggle('active',mod==='zayavki');
   document.getElementById('tabScan').classList.toggle('active',mod==='scan');
   document.getElementById('tabDiplom').classList.toggle('active',mod==='diplom');
+  document.getElementById('tabClients').classList.toggle('active',mod==='clients');
   if(mod==='scan')renderDoc();
   if(mod==='diplom')renderDiplom();
+  if(mod==='clients')renderClients();
 }
 
 // ===================== DOC ENHANCER v3 — pure JS =====================
@@ -1916,6 +1923,313 @@ function diplomCheckSpec(){
   }
   el.innerHTML=html;
 }
+
+// ===================== CLIENTS MODULE =====================
+// Модуль "Клиенты": единая точка входа к данным клиента из разных источников.
+// Тянет компании из Битрикса через REST API (crm.company.list), кэширует в localStorage.
+// Даёт ссылки на: карточку Битрикс, поиск в Mail.ru, Wazzup.
+const CLIENTS_CACHE_KEY='mg_clients_cache_v1';
+const CLIENTS_CACHE_TTL=3600000; // 1 час в миллисекундах
+const BITRIX_PORTAL='https://mavisgroup.bitrix24.by';
+const WAZZUP_URL=BITRIX_PORTAL+'/marketplace/app/94/';
+let clientsState={
+  companies:[],     // массив всех компаний из Битрикса
+  loading:false,
+  loadProgress:'',
+  error:'',
+  search:'',
+  sort:'name_asc', // name_asc | name_desc | created_desc | created_asc | updated_desc
+  selected:null,   // выбранная компания (для показа деталей)
+  lastUpdate:null  // timestamp последнего обновления
+};
+
+// Загрузка компаний из Битрикса с пагинацией (по 50 за раз).
+async function loadCompanies(forceRefresh=false){
+  // Проверяем кэш
+  if(!forceRefresh){
+    try{
+      const cached=localStorage.getItem(CLIENTS_CACHE_KEY);
+      if(cached){
+        const data=JSON.parse(cached);
+        if(data.ts && (Date.now()-data.ts)<CLIENTS_CACHE_TTL && Array.isArray(data.companies)){
+          clientsState.companies=data.companies;
+          clientsState.lastUpdate=data.ts;
+          return;
+        }
+      }
+    }catch(e){console.warn('Cache read failed:',e)}
+  }
+  // Грузим из Битрикса
+  clientsState.loading=true;
+  clientsState.error='';
+  clientsState.loadProgress='Подключаюсь к Битриксу...';
+  renderClients();
+  try{
+    const all=[];
+    let start=0;
+    const select=['ID','TITLE','PHONE','EMAIL','DATE_CREATE','DATE_MODIFY','ASSIGNED_BY_ID'];
+    while(true){
+      clientsState.loadProgress=`Загружено ${all.length} компаний...`;
+      renderClients();
+      const params={start:start};
+      select.forEach((f,i)=>params[`select[${i}]`]=f);
+      params['order[ID]']='ASC';
+      const data=await bxCall('crm.company.list',params);
+      if(data.error){throw new Error(data.error_description||data.error)}
+      const batch=data.result||[];
+      all.push(...batch);
+      if(data.next!==undefined && batch.length>0){
+        start=data.next;
+      } else {
+        break;
+      }
+      if(all.length>50000){console.warn('Too many companies, stopping at 50000');break}
+    }
+    // Нормализуем телефоны и email — они приходят как массивы объектов
+    const normalized=all.map(c=>{
+      const phones=Array.isArray(c.PHONE)?c.PHONE.map(p=>p.VALUE).filter(Boolean):[];
+      const emails=Array.isArray(c.EMAIL)?c.EMAIL.map(p=>p.VALUE).filter(Boolean):[];
+      return {
+        id:c.ID,
+        title:c.TITLE||'(без названия)',
+        phones:phones,
+        emails:emails,
+        searchText:((c.TITLE||'')+' '+phones.join(' ')+' '+emails.join(' ')).toLowerCase(),
+        created:c.DATE_CREATE||'',
+        modified:c.DATE_MODIFY||''
+      };
+    });
+    clientsState.companies=normalized;
+    clientsState.lastUpdate=Date.now();
+    try{
+      localStorage.setItem(CLIENTS_CACHE_KEY,JSON.stringify({
+        ts:clientsState.lastUpdate,
+        companies:normalized
+      }));
+    }catch(e){console.warn('Cache save failed:',e)}
+  }catch(e){
+    console.error('Load companies failed:',e);
+    clientsState.error='Ошибка загрузки: '+(e.message||String(e));
+  }
+  clientsState.loading=false;
+  clientsState.loadProgress='';
+  renderClients();
+}
+
+function sortCompanies(arr,mode){
+  const a=arr.slice();
+  if(mode==='name_asc')a.sort((x,y)=>x.title.localeCompare(y.title,'ru'));
+  else if(mode==='name_desc')a.sort((x,y)=>y.title.localeCompare(x.title,'ru'));
+  else if(mode==='created_desc')a.sort((x,y)=>(y.created||'').localeCompare(x.created||''));
+  else if(mode==='created_asc')a.sort((x,y)=>(x.created||'').localeCompare(y.created||''));
+  else if(mode==='updated_desc')a.sort((x,y)=>(y.modified||'').localeCompare(x.modified||''));
+  return a;
+}
+
+function filterCompanies(arr,q){
+  const s=(q||'').toLowerCase().trim();
+  if(!s)return arr;
+  return arr.filter(c=>c.searchText.includes(s));
+}
+
+function fmtDate(iso){
+  if(!iso)return '';
+  const d=new Date(iso);
+  if(isNaN(d))return '';
+  return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric'});
+}
+
+function mailRuSearchUrl(query){
+  return 'https://e.mail.ru/search/?q_query='+encodeURIComponent(query);
+}
+
+function selectCompany(id){
+  clientsState.selected=clientsState.companies.find(c=>c.id===id)||null;
+  renderClients();
+}
+function unselectCompany(){
+  clientsState.selected=null;
+  renderClients();
+}
+
+function renderClients(){
+  const el=document.getElementById('clientsApp');
+  if(!el)return;
+  const C=clientsState;
+
+  if(C.selected){
+    renderClientCard(el,C.selected);
+    return;
+  }
+
+  if(C.companies.length===0 && !C.loading && !C.error){
+    el.innerHTML=`
+    <div class="card">
+      <div class="card-title">👥 Клиенты</div>
+      <div class="card-sub">Единая точка входа к данным клиента: Битрикс, почта Mail.ru, Wazzup.</div>
+      <button onclick="loadCompanies(true)" style="margin-top:10px;padding:12px 24px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit">📥 Загрузить компании из Битрикса</button>
+      <div style="font-size:12px;color:#666;margin-top:8px">При первой загрузке тысяч компаний это может занять 10-30 секунд. Дальше данные кэшируются на 1 час.</div>
+    </div>`;
+    return;
+  }
+
+  if(C.loading){
+    el.innerHTML=`
+    <div class="card">
+      <div class="card-title">👥 Клиенты</div>
+      <div style="text-align:center;padding:30px">
+        <div class="spin"></div>
+        <div style="margin-top:14px;font-size:14px;color:#333">${E(C.loadProgress||'Загрузка...')}</div>
+        <div style="font-size:12px;color:#888;margin-top:6px">Не закрывайте страницу.</div>
+      </div>
+    </div>`;
+    return;
+  }
+
+  if(C.error){
+    el.innerHTML=`
+    <div class="card">
+      <div class="card-title">👥 Клиенты</div>
+      <div class="status err">${E(C.error)}</div>
+      <button onclick="loadCompanies(true)" style="margin-top:10px;padding:10px 20px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Попробовать снова</button>
+    </div>`;
+    return;
+  }
+
+  const filtered=filterCompanies(C.companies,C.search);
+  const sorted=sortCompanies(filtered,C.sort);
+  const total=C.companies.length;
+  const shown=sorted.length;
+  const lastUpd=C.lastUpdate?new Date(C.lastUpdate).toLocaleString('ru-RU'):'';
+
+  const RENDER_LIMIT=300;
+  const visible=sorted.slice(0,RENDER_LIMIT);
+  const limited=sorted.length>RENDER_LIMIT;
+
+  el.innerHTML=`
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <div>
+        <div class="card-title" style="margin:0">👥 Клиенты</div>
+        <div style="font-size:12px;color:#666;margin-top:2px">Загружено: <b>${total}</b> · Найдено: <b>${shown}</b>${lastUpd?` · Обновлено: ${E(lastUpd)}`:''}</div>
+      </div>
+      <button onclick="loadCompanies(true)" style="padding:8px 14px;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">🔄 Обновить</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:10px">
+      <input class="search-input" placeholder="🔍 Поиск по названию, телефону, email..." value="${E(C.search)}" oninput="clientsState.search=this.value;renderClientsList()">
+      <select onchange="clientsState.sort=this.value;renderClients()" style="padding:9px 11px;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;font-family:inherit;background:#fafbfc;cursor:pointer">
+        <option value="name_asc" ${C.sort==='name_asc'?'selected':''}>А-Я (по алфавиту)</option>
+        <option value="name_desc" ${C.sort==='name_desc'?'selected':''}>Я-А (обратно)</option>
+        <option value="created_desc" ${C.sort==='created_desc'?'selected':''}>Сначала новые</option>
+        <option value="created_asc" ${C.sort==='created_asc'?'selected':''}>Сначала старые</option>
+        <option value="updated_desc" ${C.sort==='updated_desc'?'selected':''}>По изменению</option>
+      </select>
+    </div>
+    <div id="clientsList" style="border:1px solid #e2e8f0;border-radius:8px;max-height:600px;overflow-y:auto;background:#fff">
+      ${renderClientsListItems(visible)}
+    </div>
+    ${limited?`<div style="text-align:center;padding:10px;font-size:12px;color:#666">Показаны первые ${RENDER_LIMIT} из ${shown}. Уточните поиск, чтобы найти конкретного клиента.</div>`:''}
+  </div>`;
+}
+
+function renderClientsListItems(arr){
+  if(arr.length===0){
+    return '<div style="padding:30px;text-align:center;color:#888;font-size:13px">Ничего не найдено. Попробуйте другой запрос.</div>';
+  }
+  return arr.map(c=>{
+    const phone=c.phones[0]||'';
+    const email=c.emails[0]||'';
+    return `<div onclick="selectCompany('${E(c.id)}')" style="padding:10px 14px;border-bottom:1px solid #f1f5f9;cursor:pointer;transition:background .15s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+      <div style="font-weight:600;font-size:13px;color:#1a1a2e">${E(c.title)}</div>
+      <div style="font-size:11px;color:#64748b;margin-top:3px;display:flex;gap:14px;flex-wrap:wrap">
+        ${phone?`<span>📞 ${E(phone)}</span>`:''}
+        ${email?`<span>✉️ ${E(email)}</span>`:''}
+        ${c.created?`<span>📅 ${E(fmtDate(c.created))}</span>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderClientsList(){
+  const el=document.getElementById('clientsList');
+  if(!el)return;
+  const filtered=filterCompanies(clientsState.companies,clientsState.search);
+  const sorted=sortCompanies(filtered,clientsState.sort);
+  const RENDER_LIMIT=300;
+  el.innerHTML=renderClientsListItems(sorted.slice(0,RENDER_LIMIT));
+}
+
+function renderClientCard(el,c){
+  const bitrixUrl=`${BITRIX_PORTAL}/crm/company/details/${c.id}/`;
+  const searchTerms=[...c.emails,...c.phones];
+  const mailSearches=searchTerms.map(t=>({term:t,url:mailRuSearchUrl(t)}));
+
+  el.innerHTML=`
+  <div class="card">
+    <button onclick="unselectCompany()" style="padding:6px 12px;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;margin-bottom:14px">← Назад к списку</button>
+    <div style="font-size:18px;font-weight:600;color:#1a1a2e;line-height:1.3">${E(c.title)}</div>
+    <div style="font-size:12px;color:#64748b;margin-top:4px">ID в Битриксе: ${E(c.id)}${c.created?` · Создан: ${E(fmtDate(c.created))}`:''}${c.modified?` · Изменён: ${E(fmtDate(c.modified))}`:''}</div>
+
+    ${c.phones.length>0?`
+    <div style="margin-top:14px">
+      <div style="font-size:11px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px">Телефоны</div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        ${c.phones.map(p=>`<a href="tel:${E(p)}" style="font-size:14px;color:#2563eb;text-decoration:none">📞 ${E(p)}</a>`).join('')}
+      </div>
+    </div>`:''}
+
+    ${c.emails.length>0?`
+    <div style="margin-top:12px">
+      <div style="font-size:11px;font-weight:600;color:#475569;text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px">Email</div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        ${c.emails.map(e=>`<a href="mailto:${E(e)}" style="font-size:14px;color:#2563eb;text-decoration:none">✉️ ${E(e)}</a>`).join('')}
+      </div>
+    </div>`:''}
+  </div>
+
+  <div class="card">
+    <div class="card-title">🔗 Открыть в источниках</div>
+    <div class="card-sub">Один клик — переход в нужную систему с автоматическим поиском по этому клиенту.</div>
+
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+      <a href="${bitrixUrl}" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;border-radius:9px;text-decoration:none;transition:transform .15s" onmouseover="this.style.transform='translateY(-1px)'" onmouseout="this.style.transform=''">
+        <span style="font-size:22px">🏢</span>
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600">Карточка компании в Битриксе</div>
+          <div style="font-size:11px;opacity:.7;margin-top:2px">Вся история: дела, сделки, документы, переписка</div>
+        </div>
+        <span style="font-size:16px;opacity:.6">→</span>
+      </a>
+
+      ${mailSearches.length>0?mailSearches.map(m=>`
+      <a href="${E(m.url)}" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:linear-gradient(135deg,#0066cc,#0052a3);color:#fff;border-radius:9px;text-decoration:none;transition:transform .15s" onmouseover="this.style.transform='translateY(-1px)'" onmouseout="this.style.transform=''">
+        <span style="font-size:22px">📧</span>
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600">Поиск в Mail.ru</div>
+          <div style="font-size:11px;opacity:.85;margin-top:2px">Найти всю переписку по: ${E(m.term)}</div>
+        </div>
+        <span style="font-size:16px;opacity:.6">→</span>
+      </a>`).join(''):`
+      <div style="padding:12px 14px;background:#fef3c7;border:1px solid #fcd34d;border-radius:9px;color:#78350f;font-size:13px">
+        ⚠️ У этой компании в Битриксе нет ни email, ни телефона. Поиск в Mail.ru невозможен — добавьте контакты в карточку Битрикса.
+      </div>`}
+
+      <a href="${WAZZUP_URL}" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff;border-radius:9px;text-decoration:none;transition:transform .15s" onmouseover="this.style.transform='translateY(-1px)'" onmouseout="this.style.transform=''">
+        <span style="font-size:22px">💬</span>
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600">Wazzup (мессенджеры)</div>
+          <div style="font-size:11px;opacity:.85;margin-top:2px">Viber, Telegram, WhatsApp. Найдите чат по номеру: ${c.phones[0]?E(c.phones[0]):'(телефон не указан)'}</div>
+        </div>
+        <span style="font-size:16px;opacity:.6">→</span>
+      </a>
+    </div>
+
+    <div style="margin-top:14px;padding:10px 14px;background:#f0f5ff;border-left:3px solid #2563eb;border-radius:6px;font-size:12px;color:#1e3a8a">
+      <b>💡 Подсказка:</b> Mail.ru открывается с уже введённым запросом — увидите всю переписку. Wazzup открывается на общем экране — выберите нужный чат из списка слева.
+    </div>
+  </div>`;
+}
+// ===================== END CLIENTS MODULE =====================
 
 render();
 </script>
