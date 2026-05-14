@@ -667,10 +667,23 @@ function selectAllDocItems(check){
 function render(){document.getElementById('stepsBar').innerHTML=STEPS.map((n,i)=>`<div class="step-item ${S.step===i?'active':''} ${S.step>i?'done':''}" onclick="if(${i}<=${S.step}){S.step=${i};render()}">${n}</div>`).join('');const el=document.getElementById('app');[rUpload,rCompany,rType,rParams,rGenerate][S.step](el)}
 
 function rUpload(el){
-// Reset all data for new application
-S.company={};S.iso={consultant:'Клепицкая Виктория Александровна',scope:'выполнение функций генерального подрядчика, производство строительно-монтажных работ',yearImplemented:'2026',subdivisions:'нет',prevCert:'нет'};S.cert={standard:'',productName:'',tnved:'',okp:'',production:'Серийно',scheme:'1С'};S.spk={headPosition:'',headName:''};S.sw=new Set();S.responsible={};S.bxS='';S.bxR=[];S.bxL=false;S.gen=false;S.done=false;S.ws='';S.kpMsg='';S.kpRawText='';S.kpProgress='';S.docConfirm=null;
-el.innerHTML=`<div class="upload-zone" id="dz" onclick="document.getElementById('fi').click()"><input type="file" id="fi" accept=".docx" hidden><div class="upload-icon">📄</div><div class="upload-title">Загрузите счёт-заказ или договор</div><div class="upload-sub">Перетащите .docx файл или нажмите для выбора</div></div><div id="us"></div><div style="text-align:center;margin-top:12px"><button class="btn btn-s" onclick="S.step=1;render()">Пропустить (ввести вручную)</button></div>`;const z=document.getElementById('dz'),fi=document.getElementById('fi');z.ondragover=e=>{e.preventDefault();z.classList.add('drag')};z.ondragleave=()=>z.classList.remove('drag');z.ondrop=e=>{e.preventDefault();z.classList.remove('drag');doFile(e.dataTransfer.files[0])};fi.onchange=()=>doFile(fi.files[0])}
-async function doFile(f){if(!f)return;document.getElementById('us').innerHTML='<div style="text-align:center;padding:20px"><div class="spin"></div>Извлекаю реквизиты...</div>';try{S.company=await parseInvoice(f);if(S.company.directorName)S.iso.representative=(S.company.directorPosition||'Директор')+' '+S.company.directorName;S.step=1;render()}catch(e){document.getElementById('us').innerHTML='<div class="status err">Ошибка: '+e.message+'</div>'}}
+// NB: state reset moved out of here. rUpload() can be called multiple times (e.g. when user clicks "← Назад"
+// from a later step). Resetting state on EVERY render of step 0 was wiping out S.sw, S.responsible, etc.
+// Use resetForNewApplication() explicitly when starting a new application (e.g. via "Новая заявка" button).
+el.innerHTML=`<div class="upload-zone" id="dz" onclick="document.getElementById('fi').click()"><input type="file" id="fi" accept=".docx" hidden><div class="upload-icon">📄</div><div class="upload-title">Загрузите счёт-заказ или договор</div><div class="upload-sub">Перетащите .docx файл или нажмите для выбора</div></div><div id="us"></div><div style="text-align:center;margin-top:12px"><button class="btn btn-s" onclick="S.step=1;render()">Пропустить (ввести вручную)</button><button class="btn btn-s" onclick="resetForNewApplication();render()" style="margin-left:8px;background:#fee2e2;color:#b91c1c">🔄 Сбросить и начать заново</button></div>`;const z=document.getElementById('dz'),fi=document.getElementById('fi');z.ondragover=e=>{e.preventDefault();z.classList.add('drag')};z.ondragleave=()=>z.classList.remove('drag');z.ondrop=e=>{e.preventDefault();z.classList.remove('drag');doFile(e.dataTransfer.files[0])};fi.onchange=()=>doFile(fi.files[0])}
+
+// Reset all application state. Called explicitly when starting a fresh application.
+function resetForNewApplication(){
+  S.company={};
+  S.iso={consultant:'Клепицкая Виктория Александровна',scope:'выполнение функций генерального подрядчика, производство строительно-монтажных работ',yearImplemented:'2026',subdivisions:'нет',prevCert:'нет'};
+  S.cert={standard:'',productName:'',tnved:'',okp:'',production:'Серийно',scheme:'1С'};
+  S.spk={headPosition:'',headName:''};
+  S.sw=new Set();
+  S.responsible={};
+  S.bxS='';S.bxR=[];S.bxL=false;S.gen=false;S.done=false;S.ws='';
+  S.kpMsg='';S.kpRawText='';S.kpProgress='';S.docConfirm=null;
+}
+async function doFile(f){if(!f)return;resetForNewApplication();document.getElementById('us').innerHTML='<div style="text-align:center;padding:20px"><div class="spin"></div>Извлекаю реквизиты...</div>';try{S.company=await parseInvoice(f);if(S.company.directorName)S.iso.representative=(S.company.directorPosition||'Директор')+' '+S.company.directorName;S.step=1;render()}catch(e){document.getElementById('us').innerHTML='<div class="status err">Ошибка: '+e.message+'</div>'}}
 
 function rCompany(el){const f=(k,l,fw)=>`<div class="field ${fw?'fw':''}"><label>${l}</label><input type="text" value="${E(S.company[k]||'')}" onchange="S.company['${k}']=this.value"></div>`;el.innerHTML=`<div class="card"><div class="card-title">📇 Реквизиты заказчика</div><div class="card-sub">Проверьте данные из счёта-заказа.</div><div class="fg">${f('companyName','Наименование организации',1)}${f('legalAddress','Юридический адрес',1)}${f('bankAccount','Расчётный счёт (IBAN)')}${f('bankName','Банк')}${f('bik','БИК')}${f('bankAddress','Адрес банка')}${f('unp','УНП (рег. номер в ЕГР)')}${f('phone','Телефон')}${f('email','E-mail')}${f('directorPosition','Должность руководителя')}${f('directorName','ФИО руководителя')}</div></div><div class="actions"><button class="btn btn-s" onclick="S.step=0;render()">← Назад</button><button class="btn btn-p" onclick="S.step=2;render()">Далее →</button></div>`}
 
