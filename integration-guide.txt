@@ -1,0 +1,7 @@
+Добавление вкладки «Подбор СИ» в index.html:
+1. Перед </style> вставить содержимое si-style.css.
+2. После кнопки tabClients добавить: <button class="mod-tab" id="tabSI" onclick="switchModule('si')">📏 Подбор СИ</button>
+3. Перед <div class="ocr-banner вставить: <div id="moduleSI" style="display:none"><div class="content" id="siApp"></div></div>
+4. В switchModule(mod) добавить до закрывающей фигурной скобки: document.getElementById('moduleSI').style.display=mod==='si'?'':'none'; document.getElementById('tabSI').classList.toggle('active',mod==='si'); if(mod==='si')siRender();
+5. Перед последним </body> вставить: <script src="si-data.js"></script>
+6. Файлы si-data.js и si-style.css хранить рядом с index.html.
