@@ -173,7 +173,7 @@ const W=[{id:'w1',c:'Устройство оснований фундамент�
 // Все фразы — в нижнем регистре, без пунктуации, минимум 6-8 символов.
 // ============================================================
 const WORK_KEYS={
-  w1:['устройство оснований фундаментов зданий','устройство оснований и земляных','вертикальная планировка','разработка выемок','устройство насыпей','обратных засыпок','оснований фундаментов и земляных'],
+  w1:['устройство искусственных оснований','устройство оснований фундаментов зданий','устройство оснований и земляных','вертикальная планировка','разработка выемок','устройство насыпей','обратных засыпок','оснований фундаментов и земляных'],
   w2:['устройство плитных фундаментов','плитных фундаментов','свайных фундаментов','устройство свайных фунд','щелевых фундаментов','фундаментов из готовых сборных свай','фундаментов из буронабивных','фундаментов из набивных свай','устройство ростверка'],
   w3:['стена в грунте','устройство специальных видов фундаментов','подпорных стен','наружных стен подвалов','буроинъекционных анкеров'],
   w4:['возведение монолитных бетонных','монолитных бетонных и ж','монолитных бетонных и железобетонных','опалубочные арматурные бетонные','опалубочные работы','арматурные работы','бетонирование'],
@@ -184,7 +184,7 @@ const WORK_KEYS={
   w9:['монтаж легких ограждающих','легких ограждающих конструкций','гипсобетонных перегородок','каркасно-обшивных перегородок','каркасно обшивных перегородок','стен из металлических панелей','асбестоцементных экструзионных','асбестоцементных панелей'],
   w10:['сварочные работы','производство сварочных','сварка в условиях низких температур','подготовка и сборка конструктивных элементов'],
   w11:['устройство антикоррозионных','антикоррозионных покрытий','гуммировочные','металлизационные'],
-  w12:['устройство кровель','кровли из рулонных','кровли из мелкоштучных','кровли из листовой стали','металлической черепицы','металлочерепиц','профнастил'],
+  w12:['устройство кровли','устройство кровель','кровли из рулонных','кровли из мелкоштучных','кровли из листовой стали','металлической черепицы','металлочерепиц','профнастил'],
   w13:['устройство изоляционных покрытий','изоляционных покрытий','гидроизоляции из рулонных','окрасочной гидроизоляции','гидроизоляции из цементных','гидроизоляции из металлических','устройство гидроизоляции из рулонных'],
   w14:['тепловой изоляции наружных ограждающих','тепловой изоляции наружных','системы утепления легкие штукатурные','штукатурные системы утепления','вентилируемые системы утепления','тепловой изоляции надземного','системы утепления крыш','тепловая изоляция наружных ограждающих'],
   w15:['тепловой изоляции оборудования','тепловой изоляции трубопроводов'],
@@ -478,13 +478,32 @@ async function extractDocText(file,onProgress){
   const name=(file.name||'').toLowerCase();
   // DOCX/DOC
   if(name.endsWith('.docx')||name.endsWith('.doc')){
-    onProgress&&onProgress('Читаю .docx…');
+    onProgress&&onProgress('Читаю Word…');
     const buf=await file.arrayBuffer();
-    const result=await mammoth.extractRawText({arrayBuffer:buf});
-    return result.value||'';
+    const bytes=new Uint8Array(buf);
+    if(bytes[0]===208&&bytes[1]===207)return readLegacyWord(buf);
+    if(bytes[0]===80&&bytes[1]===75){const result=await mammoth.extractRawText({arrayBuffer:buf});return result.value||'';}
+    const raw=new TextDecoder('utf-8').decode(buf);
+    if(/<html|<body|<table/i.test(raw))return new DOMParser().parseFromString(raw,'text/html').body.innerText||new DOMParser().parseFromString(raw,'text/html').body.textContent;
+    throw new Error('Неизвестный вариант DOC. Сохраните как DOCX или PDF.');
   }
   // PDF
   if(name.endsWith('.pdf')){
+    onProgress&&onProgress('Открываю PDF…');
+    const buf=await file.arrayBuffer();
+    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+    let fullText='';
+    // Сначала попробуем извлечь встроенный текст (для PDF с реальным текстом)
+    let embeddedTextLen=0;
+    for(let i=1;i<=pdf.numPages;i++){
+      const page=await pdf.getPage(i);
+      const tc=await page.getTextContent();
+      const pageText=kpPdfText(tc.items,page.getViewport({scale:1}).width);
+      embeddedTextLen+=pageText.length;
+      fullText+='\n'+pageText;
+    }
+    // Если встроенного текста почти нет — это скан, используем OCR
+    if(embeddedTextLen<100){
     if(!ocrReady){
       if(ocrError)throw new Error('OCR недоступен: '+ocrError);
       onProgress&&onProgress('Жду загрузку OCR…');
@@ -495,21 +514,6 @@ async function extractDocText(file,onProgress){
         await new Promise(r=>setTimeout(r,500));
       }
     }
-    onProgress&&onProgress('Открываю PDF…');
-    const buf=await file.arrayBuffer();
-    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
-    let fullText='';
-    // Сначала попробуем извлечь встроенный текст (для PDF с реальным текстом)
-    let embeddedTextLen=0;
-    for(let i=1;i<=pdf.numPages;i++){
-      const page=await pdf.getPage(i);
-      const tc=await page.getTextContent();
-      const pageText=tc.items.map(it=>it.str).join(' ');
-      embeddedTextLen+=pageText.length;
-      fullText+='\n'+pageText;
-    }
-    // Если встроенного текста почти нет — это скан, используем OCR
-    if(embeddedTextLen<100){
       fullText='';
       for(let i=1;i<=pdf.numPages;i++){
         onProgress&&onProgress(`Распознаю стр. ${i}/${pdf.numPages}…`);
@@ -568,7 +572,7 @@ async function extractDocText(file,onProgress){
 function detectDocType(text){
   const t=text.toLowerCase();
   // КП — наш собственный формат от MAVIS GROUP, всегда содержит «коммерческое предложение» и/или «mavis group»
-  if(t.includes('коммерческое предложение')||t.includes('mavis group')||t.includes('mavis')||t.includes('мавис')||t.includes('виды работ для спк')||t.includes('наши услуги'))return 'kp';
+  if(t.includes('предложение о сотрудничестве')||t.includes('коммерческое предложение')||t.includes('mavis group')||t.includes('mavis')||t.includes('мавис')||t.includes('виды работ для спк')||t.includes('наши услуги'))return 'kp';
   // СПК — свидетельство о технической компетентности
   if(t.includes('свидетельство о технической компетентности')||t.includes('свидетельства о технической компетентности')||t.includes('область технической компетентности')||t.includes('к свидетельству')||t.includes('система производственного контроля')||t.includes('производственного контроля'))return 'spk';
   return 'unknown';
@@ -613,7 +617,7 @@ function findByKeyPhrases(text){
     let bestLen=0;
     for(const key of keys){
       const normKey=normText(key);
-      if(norm.includes(normKey)){
+      if((' '+norm+' ').includes(' '+normKey+' ')){
         if(normKey.length>bestLen){bestLen=normKey.length;bestKey=normKey}
       }
     }
@@ -634,45 +638,17 @@ function findByKeyPhrases(text){
 // Анализирует распознанный текст. Возвращает {type, found: [{id, confidence, evidence}], rawText}
 function analyzeDoc(text){
   const type=detectDocType(text);
-  let found=[];
-  if(type==='kp'){
-    // Для КП — основной сигнал w-коды, плюс перекрёстная проверка по ключевым фразам.
-    const {matched,evidence}=findWCodes(text);
-    const byKeys=findByKeyPhrases(text);
-    const byKeysMap={};
-    byKeys.forEach(r=>byKeysMap[r.id]=r);
-    // Включаем все найденные по w-коду
-    matched.forEach(id=>{
-      const keyMatch=byKeysMap[id];
-      // Если найден и w-код и ключевая фраза — high confidence
-      const conf=keyMatch?'high':'med';
-      const ev=(evidence[id]||[]).slice(0,2).join(' | ')+(keyMatch?' | "'+keyMatch.context+'"':'');
-      found.push({id,confidence:conf,evidence:ev});
-    });
-    // Если по ключевой фразе нашлась high-confidence — добавим даже если w-код не нашёлся
-    byKeys.forEach(r=>{
-      if(r.confidence==='high' && !matched.has(r.id)){
-        found.push({id:r.id,confidence:'med',evidence:'по ключевой фразе: "'+r.context+'"'});
-      }
-    });
-  } else if(type==='spk'){
-    // СПК — только по ключевым фразам.
-    const byKeys=findByKeyPhrases(text);
-    byKeys.forEach(r=>{
-      found.push({id:r.id,confidence:r.confidence,evidence:'"'+r.context+'"'});
-    });
-  } else {
-    // unknown — пробуем оба способа, но с пометкой
-    const {matched,evidence}=findWCodes(text);
-    matched.forEach(id=>found.push({id,confidence:'med',evidence:(evidence[id]||[]).slice(0,2).join(' | ')}));
-    if(found.length===0){
-      const byKeys=findByKeyPhrases(text);
-      byKeys.forEach(r=>found.push({id:r.id,confidence:r.confidence,evidence:'"'+r.context+'"'}));
-    }
-  }
+  const sections=kpSections(text);
+  const source=sections.spk.length?sections.spk.join('\n'):(sections.att.length||sections.licenses.length?'':text);
+  const foundMap=new Map();
+  for(const line of (sections.spk.length?sections.spk:[source]))for(const r of findByKeyPhrases(line)){const prev=foundMap.get(r.id);foundMap.set(r.id,{id:r.id,confidence:'high',evidence:prev?prev.evidence+'; '+line:sections.spk.length?line:r.context});}
+  if(type==='kp')for(const id of findWCodes(source).matched)if(!foundMap.has(id))foundMap.set(id,{id,confidence:'med',evidence:'Код из КП'});
+  let found=[...foundMap.values()];
+  const unknown=sections.spk.filter(line=>!findByKeyPhrases(line).length);
+
   // Сортируем по id (w1, w2, ...)
   found.sort((a,b)=>parseInt(a.id.substring(1),10)-parseInt(b.id.substring(1),10));
-  return {type,found,rawText:text};
+  return {type,found,rawText:text,sections,unknown};
 }
 
 // Основной обработчик: загружает файл, анализирует, готовит диалог подтверждения.
@@ -700,7 +676,7 @@ async function handleDoc(file){
           // Авто-отмечены только те, в чём уверенны
           checked:r.confidence==='high'
         })),
-        rawText:text
+        rawText:text, sections:analysis.sections, unknown:analysis.unknown
       };
       S.kpMsg='';
     }
@@ -719,7 +695,8 @@ function confirmDoc(){
   S.docConfirm.items.forEach(it=>{
     if(it.checked){S.sw.add(it.id);added++}
   });
-  S.kpMsg='✅ Из документа добавлено видов работ: '+added+' (тип: '+S.docConfirm.typeLabel+')';
+  S.kpMsg='✅ Из документа добавлено групп работ: '+added+' (тип: '+S.docConfirm.typeLabel+')';
+  S.kpRawText=[...S.docConfirm.unknown,...S.docConfirm.sections.att].join('\n');
   S.docConfirm=null;
   render();
 }
@@ -770,7 +747,7 @@ function rType(el){el.innerHTML=`<div class="card"><div class="card-title">📝 
 function rParams(el){const f=(o,k,l,fw,ph)=>`<div class="field ${fw?'fw':''}"><label>${l}</label><input type="text" value="${E(S[o][k]||'')}" placeholder="${ph||''}" onchange="S['${o}']['${k}']=this.value"></div>`;const isI=S.appType==='bsc'||S.appType==='beltechexpert',isC=S.appType==='cert_metal',isS=S.appType==='stroycomplex'||S.appType==='bisp';
 const iH=isI?`<div class="card"><div class="card-title">📊 Сведения о системе менеджмента</div><div class="fg">${f('iso','yearImplemented','Год внедрения',0,'2026')}${f('iso','employeeCount','Количество работников',0,'15')}${f('iso','scope','Область применения',1,'производство строительно-монтажных работ')}${f('iso','consultant','Консультирование проводил',1,'Клепицкая Виктория Александровна')}${f('iso','subdivisions','Наличие обособленных подразделений',0,'нет')}${f('iso','prevCert','Предыдущий сертификат',0,'нет')}${f('iso','representative','Представитель руководства',1,'')}${f('iso','contactPerson','Контактное лицо',0,'')}${f('iso','contactPhone','Телефон контактного лица',0,'')}</div></div>`:'';
 const cH=isC?`<div class="card"><div class="card-title">⚙️ Данные для сертификации продукции</div><div class="fg"><div class="field fw"><label>Стандарт</label><select onchange="selStd(this.value)"><option value="">Выберите...</option>${CERTS.map(s=>`<option value="${s.id}" ${S.cert.standard===s.id?'selected':''}>${s.label} — ${s.fn}</option>`).join('')}</select></div>${f('cert','productName','Наименование продукции',1)}${f('cert','tnved','Код ТН ВЭД ЕАЭС')}${f('cert','okp','Код ОКП РБ')}<div class="field"><label>Выпускается</label><select onchange="S.cert.production=this.value"><option ${S.cert.production==='Серийно'?'selected':''}>Серийно</option><option ${S.cert.production==='Партия'?'selected':''}>Партия</option><option ${S.cert.production==='Единичное изделие'?'selected':''}>Единичное изделие</option></select></div>${f('cert','scheme','Схема сертификации',0,'1С')}</div></div>`:'';
-const sH=isS?`<div class="card"><div class="card-title">📑 Дополнительные данные для СПК</div><div class="fg">${f('spk','headPosition','Должность руководителя',0,'Директор')}${f('spk','headName','ФИО руководителя',0,'')}</div></div><div class="card"><div class="card-title">🔧 Виды работ (<span id="swCount">${S.sw.size}</span> из ${worksForCurrentType().length})</div><div class="card-sub">Выберите вручную или загрузите документ для автоподбора. Поддерживаются: КП (.docx, .pdf), СПК — свидетельство о технич. компетентности (.pdf, .jpg, .png). Приложение само определит тип документа.</div><div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap"><button class="btn-bx" onclick="document.getElementById('kpFile').click()" style="background:#7c3aed">📄 Загрузить КП или СПК</button><input type="file" id="kpFile" accept=".docx,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.heic,.heif" hidden onchange="handleDoc(this.files[0]);this.value=''"><button class="btn-bx" onclick="selectAllVisible()" style="background:#059669">✓ Выбрать все</button><button class="btn-bx" onclick="clearAllWorks()" style="background:#94a3b8">Сбросить все</button>${S.kpMsg?'<span style="font-size:13px;color:'+(S.kpMsg.startsWith('❌')?'#dc2626':(S.kpMsg.startsWith('⚠️')?'#a16207':'#059669'))+';font-weight:500;flex-basis:100%">'+E(S.kpMsg)+'</span>':''}</div>${S.kpProgress?'<div class="kp-progress">'+E(S.kpProgress)+'</div>':''}${S.docConfirm?renderDocConfirm():''}${S.kpRawText?'<div class="kp-raw-text"><b>Распознанный текст:</b>\n'+E(S.kpRawText)+'</div>':''}<input class="search-input" placeholder="🔍 Поиск..." value="${E(S.ws)}" oninput="S.ws=this.value;renderWtList()"><div class="wt-list" id="wtList">${renderWtItems()}</div><div class="wt-count" id="wtCount">Выбрано: ${S.sw.size} из ${worksForCurrentType().length}</div></div>`:'';
+const sH=isS?`<div class="card"><div class="card-title">📑 Дополнительные данные для СПК</div><div class="fg">${f('spk','headPosition','Должность руководителя',0,'Директор')}${f('spk','headName','ФИО руководителя',0,'')}</div></div><div class="card"><div class="card-title">🔧 Виды работ (<span id="swCount">${S.sw.size}</span> из ${worksForCurrentType().length})</div><div class="card-sub">Выберите вручную или загрузите документ для автоподбора. Поддерживаются: КП (.docx, .pdf), СПК — свидетельство о технич. компетентности (.pdf, .jpg, .png). Приложение само определит тип документа.</div><div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap"><button class="btn-bx" onclick="document.getElementById('kpFile').click()" style="background:#7c3aed">📄 Загрузить КП или СПК</button><input type="file" id="kpFile" accept=".doc,.docx,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.heic,.heif" hidden onchange="handleDoc(this.files[0]);this.value=''"><button class="btn-bx" onclick="selectAllVisible()" style="background:#059669">✓ Выбрать все</button><button class="btn-bx" onclick="clearAllWorks()" style="background:#94a3b8">Сбросить все</button>${S.kpMsg?'<span style="font-size:13px;color:'+(S.kpMsg.startsWith('❌')?'#dc2626':(S.kpMsg.startsWith('⚠️')?'#a16207':'#059669'))+';font-weight:500;flex-basis:100%">'+E(S.kpMsg)+'</span>':''}</div>${S.kpProgress?'<div class="kp-progress">'+E(S.kpProgress)+'</div>':''}${S.docConfirm?renderDocConfirm():''}${S.kpRawText?'<div class="kp-raw-text"><b>Распознанный текст:</b>\n'+E(S.kpRawText)+'</div>':''}<input class="search-input" placeholder="🔍 Поиск..." value="${E(S.ws)}" oninput="S.ws=this.value;renderWtList()"><div class="wt-list" id="wtList">${renderWtItems()}</div><div class="wt-count" id="wtCount">Выбрано: ${S.sw.size} из ${worksForCurrentType().length}</div></div>`:'';
 const bxH=S.bxR.length>0?`<div style="margin-top:8px;border:1px solid #e2e8f0;border-radius:7px;max-height:150px;overflow-y:auto">${S.bxR.map(u=>`<div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:13px;display:flex;justify-content:space-between" onclick="S.responsible.name='${E(u.name)}';S.responsible.phone='${E(u.phone)}';S.bxR=[];render()"><span>${u.name}</span><span style="color:#64748b">${u.phone}</span></div>`).join('')}</div>`:'';
 el.innerHTML=`${iH}${cH}${sH}<div class="card"><div class="card-title">👤 Ответственный исполнитель</div><div class="card-sub">Найдите в Битрикс24 или введите вручную</div><div class="bx-row"><input type="text" value="${E(S.bxS)}" placeholder="Имя сотрудника..." oninput="S.bxS=this.value"><button class="btn-bx" onclick="doBx()" ${S.bxL?'disabled':''}>${S.bxL?'⏳':'🔍 Найти'}</button></div>${bxH}<div class="fg" style="margin-top:10px">${f('responsible','name','ФИО ответственного')}${f('responsible','phone','Телефон ответственного')}</div></div><div class="actions"><button class="btn btn-s" onclick="S.step=2;render()">← Назад</button><button class="btn btn-p" onclick="S.step=4;render()">Далее →</button></div>`}
 
@@ -862,7 +839,7 @@ function renderDocConfirm(){
       <button class="btn-bx" onclick="selectAllDocItems(true)" style="background:#059669;font-size:12px;padding:4px 10px">✓ Все</button>
       <button class="btn-bx" onclick="selectAllDocItems(false)" style="background:#94a3b8;font-size:12px;padding:4px 10px">Снять все</button>
     </div>
-    <div class="dc-list">${itemsHtml}</div>
+    <div class="dc-list">${itemsHtml}</div>${dc.unknown?.length?`<div class="si-warning">Строки СПК для проверки:<ul>${dc.unknown.map(x=>`<li>${E(x)}</li>`).join('')}</ul></div>`:''}${dc.sections?.spk.length?`<details><summary>Исходные виды СПК: ${dc.sections.spk.length}</summary>${dc.sections.spk.map(x=>`<div>${E(x)}</div>`).join('')}</details>`:''}${dc.sections?.att.length?`<details><summary>Отдельно: аттестация (не включена в СПК)</summary>${dc.sections.att.map(x=>`<div>${E(x)}</div>`).join('')}</details>`:''}
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
       <button class="btn-bx" onclick="confirmDoc()" style="background:#2563eb">✓ Добавить выбранные</button>
       <button class="btn-bx" onclick="cancelDoc()" style="background:#94a3b8">Отмена</button>
@@ -2346,6 +2323,7 @@ function renderClientCard(el,c){
 
 render();
 </script>
+<script src="kp-reader.js"></script>
 <script src="si-data.js"></script>
 </body>
 </html>
