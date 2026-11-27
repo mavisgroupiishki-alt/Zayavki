@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MG Tools v3 — Мавис Групп</title>
+<title>MG Tools v3.3 — Мавис Групп</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -63,7 +63,7 @@
 <body>
 <div class="header">
 <div class="header-logo">🏛️</div>
-<div style="flex:1"><h1>MG Tools</h1><p>Mavis Group — инструменты эксперта</p></div>
+<div style="flex:1"><h1>MG Tools</h1><p>Mavis Group — инструменты эксперта · версия 3.3 (БИСП: 60 видов)</p></div>
 <div class="module-tabs">
 <button class="mod-tab active" id="tabZayavki" onclick="switchModule('zayavki')">📋 Заявки</button>
 <button class="mod-tab" id="tabScan" onclick="switchModule('scan')">🔍 Сканы</button>
@@ -792,7 +792,7 @@ function analyzeDoc(text){
   const foundMap=new Map();
   for(const line of (sections.spk.length?sections.spk:[source]))for(const r of findByKeyPhrases(line)){const prev=foundMap.get(r.id);foundMap.set(r.id,{id:r.id,confidence:'high',evidence:prev?prev.evidence+'; '+line:sections.spk.length?line:r.context});}
   if(type==='kp')for(const id of findWCodes(source).matched)if(!foundMap.has(id))foundMap.set(id,{id,confidence:'med',evidence:'Код из КП'});
-  let found=[...foundMap.values()];
+  let found=[...foundMap.values()].filter(item=>worksForCurrentType().some(w=>w.id===item.id));
   const unknown=sections.spk.filter(line=>!findByKeyPhrases(line).length);
 
   // Сортируем по id (w1, w2, ...)
@@ -844,7 +844,7 @@ function confirmDoc(){
   S.docConfirm.items.forEach(it=>{
     if(it.checked){S.sw.add(it.id);added++}
   });
-  S.kpMsg='✅ Из документа добавлено видов работ: '+added+' (тип: '+S.docConfirm.typeLabel+')';
+  S.kpMsg='✅ Версия 3.3 — из документа добавлено видов работ: '+added+' (тип: '+S.docConfirm.typeLabel+')';
   S.kpRawText=[...S.docConfirm.unknown,...S.docConfirm.sections.att].join('\n');
   S.docConfirm=null;
   render();
@@ -896,7 +896,7 @@ function rType(el){el.innerHTML=`<div class="card"><div class="card-title">📝 
 function rParams(el){const f=(o,k,l,fw,ph)=>`<div class="field ${fw?'fw':''}"><label>${l}</label><input type="text" value="${E(S[o][k]||'')}" placeholder="${ph||''}" onchange="S['${o}']['${k}']=this.value"></div>`;const isI=S.appType==='bsc'||S.appType==='beltechexpert',isC=S.appType==='cert_metal',isS=S.appType==='stroycomplex'||S.appType==='bisp';
 const iH=isI?`<div class="card"><div class="card-title">📊 Сведения о системе менеджмента</div><div class="fg">${f('iso','yearImplemented','Год внедрения',0,'2026')}${f('iso','employeeCount','Количество работников',0,'15')}${f('iso','scope','Область применения',1,'производство строительно-монтажных работ')}${f('iso','consultant','Консультирование проводил',1,'Клепицкая Виктория Александровна')}${f('iso','subdivisions','Наличие обособленных подразделений',0,'нет')}${f('iso','prevCert','Предыдущий сертификат',0,'нет')}${f('iso','representative','Представитель руководства',1,'')}${f('iso','contactPerson','Контактное лицо',0,'')}${f('iso','contactPhone','Телефон контактного лица',0,'')}</div></div>`:'';
 const cH=isC?`<div class="card"><div class="card-title">⚙️ Данные для сертификации продукции</div><div class="fg"><div class="field fw"><label>Стандарт</label><select onchange="selStd(this.value)"><option value="">Выберите...</option>${CERTS.map(s=>`<option value="${s.id}" ${S.cert.standard===s.id?'selected':''}>${s.label} — ${s.fn}</option>`).join('')}</select></div>${f('cert','productName','Наименование продукции',1)}${f('cert','tnved','Код ТН ВЭД ЕАЭС')}${f('cert','okp','Код ОКП РБ')}<div class="field"><label>Выпускается</label><select onchange="S.cert.production=this.value"><option ${S.cert.production==='Серийно'?'selected':''}>Серийно</option><option ${S.cert.production==='Партия'?'selected':''}>Партия</option><option ${S.cert.production==='Единичное изделие'?'selected':''}>Единичное изделие</option></select></div>${f('cert','scheme','Схема сертификации',0,'1С')}</div></div>`:'';
-const sH=isS?`<div class="card"><div class="card-title">📑 Дополнительные данные для СПК</div><div class="fg">${f('spk','headPosition','Должность руководителя',0,'Директор')}${f('spk','headName','ФИО руководителя',0,'')}</div></div><div class="card"><div class="card-title">🔧 Виды работ (<span id="swCount">${S.sw.size}</span> из ${worksForCurrentType().length})</div><div class="card-sub">Выберите вручную или загрузите документ для автоподбора. Поддерживаются: КП (.docx, .pdf), СПК — свидетельство о технич. компетентности (.pdf, .jpg, .png). Приложение само определит тип документа.</div><div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap"><button class="btn-bx" onclick="document.getElementById('kpFile').click()" style="background:#7c3aed">📄 Загрузить КП или СПК</button><input type="file" id="kpFile" accept=".doc,.docx,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.heic,.heif" hidden onchange="handleDoc(this.files[0]);this.value=''"><button class="btn-bx" onclick="selectAllVisible()" style="background:#059669">✓ Выбрать все</button><button class="btn-bx" onclick="clearAllWorks()" style="background:#94a3b8">Сбросить все</button>${S.kpMsg?'<span style="font-size:13px;color:'+(S.kpMsg.startsWith('❌')?'#dc2626':(S.kpMsg.startsWith('⚠️')?'#a16207':'#059669'))+';font-weight:500;flex-basis:100%">'+E(S.kpMsg)+'</span>':''}</div>${S.kpProgress?'<div class="kp-progress">'+E(S.kpProgress)+'</div>':''}${S.docConfirm?renderDocConfirm():''}${S.kpRawText?'<div class="kp-raw-text"><b>Распознанный текст:</b>\n'+E(S.kpRawText)+'</div>':''}<input class="search-input" placeholder="🔍 Поиск..." value="${E(S.ws)}" oninput="S.ws=this.value;renderWtList()"><div class="wt-list" id="wtList">${renderWtItems()}</div><div class="wt-count" id="wtCount">Выбрано: ${S.sw.size} из ${worksForCurrentType().length}</div></div>`:'';
+const sH=isS?`<div class="card"><div class="card-title">📑 Дополнительные данные для СПК</div><div class="fg">${f('spk','headPosition','Должность руководителя',0,'Директор')}${f('spk','headName','ФИО руководителя',0,'')}</div></div><div class="card"><div class="card-title">🔧 Виды работ (<span id="swCount">${S.sw.size}</span> из ${worksForCurrentType().length})</div><div class="card-sub">Выберите вручную или загрузите документ для автоподбора. Поддерживаются: КП (.doc, .docx, .pdf), СПК — свидетельство о технич. компетентности (.pdf, .jpg, .png). Приложение само определит тип документа.</div><div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap"><button class="btn-bx" onclick="document.getElementById('kpFile').click()" style="background:#7c3aed">📄 Загрузить КП или СПК</button><input type="file" id="kpFile" accept=".doc,.docx,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.heic,.heif" hidden onchange="handleDoc(this.files[0]);this.value=''"><button class="btn-bx" onclick="selectAllVisible()" style="background:#059669">✓ Выбрать все</button><button class="btn-bx" onclick="clearAllWorks()" style="background:#94a3b8">Сбросить все</button>${S.kpMsg?'<span style="font-size:13px;color:'+(S.kpMsg.startsWith('❌')?'#dc2626':(S.kpMsg.startsWith('⚠️')?'#a16207':'#059669'))+';font-weight:500;flex-basis:100%">'+E(S.kpMsg)+'</span>':''}</div>${S.kpProgress?'<div class="kp-progress">'+E(S.kpProgress)+'</div>':''}${S.docConfirm?renderDocConfirm():''}${S.kpRawText?'<div class="kp-raw-text"><b>Распознанный текст:</b>\n'+E(S.kpRawText)+'</div>':''}<input class="search-input" placeholder="🔍 Поиск..." value="${E(S.ws)}" oninput="S.ws=this.value;renderWtList()"><div class="wt-list" id="wtList">${renderWtItems()}</div><div class="wt-count" id="wtCount">Выбрано: ${S.sw.size} из ${worksForCurrentType().length}</div></div>`:'';
 const bxH=S.bxR.length>0?`<div style="margin-top:8px;border:1px solid #e2e8f0;border-radius:7px;max-height:150px;overflow-y:auto">${S.bxR.map(u=>`<div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:13px;display:flex;justify-content:space-between" onclick="S.responsible.name='${E(u.name)}';S.responsible.phone='${E(u.phone)}';S.bxR=[];render()"><span>${u.name}</span><span style="color:#64748b">${u.phone}</span></div>`).join('')}</div>`:'';
 el.innerHTML=`${iH}${cH}${sH}<div class="card"><div class="card-title">👤 Ответственный исполнитель</div><div class="card-sub">Найдите в Битрикс24 или введите вручную</div><div class="bx-row"><input type="text" value="${E(S.bxS)}" placeholder="Имя сотрудника..." oninput="S.bxS=this.value"><button class="btn-bx" onclick="doBx()" ${S.bxL?'disabled':''}>${S.bxL?'⏳':'🔍 Найти'}</button></div>${bxH}<div class="fg" style="margin-top:10px">${f('responsible','name','ФИО ответственного')}${f('responsible','phone','Телефон ответственного')}</div></div><div class="actions"><button class="btn btn-s" onclick="S.step=2;render()">← Назад</button><button class="btn btn-p" onclick="S.step=4;render()">Далее →</button></div>`}
 
@@ -2472,7 +2472,7 @@ function renderClientCard(el,c){
 
 render();
 </script>
-<script src="kp-reader.js"></script>
-<script src="si-data.js"></script>
+<script src="kp-reader.js?v=3.3"></script>
+<script src="si-data.js?v=3.3"></script>
 </body>
 </html>
