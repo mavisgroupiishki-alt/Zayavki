@@ -135,7 +135,7 @@ async function siReadFile(file){
     if(v>score){best=i;score=v}
    });
    const ids=findByKeyPhrases(line).map(x=>x.id);
-   const mapping={w1:17,w2:17,w3:17,w4:7,w5:8,w6:9,w7:6,w8:10,w9:13,w11:16,w12:15,w13:0,w14:14,w15:24,w16:12,w24:11,w25:23,w26:23,w28:1,w29:1,w30:3,w31:1,w32:2,w34:4,w35:5,w36:19,w37:19,w38:18,w39:18,w40:18,w44:22,w45:21,w51:21,w53:20,w54:20,w50:14};
+   const mapping={w60:17,w61:17,w62:17,w1:17,w2:17,w3:17,w4:7,w5:8,w6:9,w7:6,w8:10,w9:13,w11:16,w12:15,w13:0,w14:14,w15:24,w16:12,w24:11,w25:23,w26:23,w28:1,w29:1,w30:3,w31:1,w32:2,w34:4,w35:5,w36:19,w37:19,w38:18,w39:18,w40:18,w44:22,w45:21,w51:21,w53:20,w54:20,w50:14};
    const mapped=ids.map(id=>mapping[id]).filter(i=>i!==undefined);
    if(mapped.length)mapped.forEach(i=>matched.add(i));
    else if(best>=0&&score>=.80)matched.add(best);
